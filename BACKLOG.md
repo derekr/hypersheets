@@ -31,56 +31,47 @@ higher stakes.
 one-line-per-render invariant (the Datastar SDK splits payloads on `\n`) and would need
 variable row heights. A cell is one line.
 
-## One rendered window, shared by every viewer on it (THE fan-out fix)
+## The fan-out fix — DONE, and what it did not fix
 
-**This is the reason the process-wide stream cap came down from 256 to 64.** It is
-not built here on purpose — the cap is the honest short-term answer and this is the
-change that removes the need for it.
+**Built.** Every render path now reads through one shared, single-flighted cache
+keyed on `(sheet handle, mutation version, row range)`, so N viewers woken by one
+edit cause one database read instead of N.
 
-Every connection currently renders for itself. An edit dirties ten cells; each of the
-N viewers independently re-reads those cells out of SQLite and rebuilds the same
-HTML. Measured on an Apple M5 (10 cores), N streams on one hot sheet, one `A1` edit
-per second:
+Measured, same harness both ways, one edit on a hot sheet:
 
-| streams | `render.cells` p50 | wake queue p50 | server-side push delay | CPU per edit |
-| --- | --- | --- | --- | --- |
-| 1 | 0.50 ms | 0.3 ms | 0.8 ms p50 | 10.5 ms |
-| 64 | 5.02 ms | 4.0 ms | 9.0 / 17.8 p95 | 68.5 ms |
-| 256 | 13.16 ms | 22.9 ms | 36.1 / 66.9 p95 | 291.0 ms |
+| viewers | database reads caused by ONE edit, before | after |
+| --- | --- | --- |
+| 32 | 32 | **1** |
+| 128 | 128 | **1** |
 
-**The same render is 26x slower at 256 viewers than at 1, while the machine is 29%
-of one core busy.** It is not CPU-bound; it is N copies of one piece of work queued
-behind a per-sheet connection pool of eight.
+The first attempt cached the wrong thing and is worth recording. The obvious
+target is the window render, but an **edit does not go through it** — it takes the
+incremental `pushCells` path, and caching `renderScreen` changed nothing at all
+(measured: 33 renders for 32 viewers). The bottleneck was `sh.WindowCtx`, the read
+underneath *every* path, which is what queues behind the eight-connection pool.
+Caching the read rather than the markup is also what makes it general: first
+paint, scroll edges and edits all share one entry.
 
-**Enlarging the pool is not the fix, and that was measured rather than assumed.** At
-`SetMaxOpenConns(32)`, `render.cells` p50 falls 13.16 → 1.08 ms and nothing improves
-end to end: the queue moves into the Go scheduler (wake queue 22.9 → 26.8 ms), CPU
-per edit rises 18% (291 → 343 ms), and first paint p95 goes 130 → 172 ms. On a
-2 vCPU box more concurrent readers would be strictly worse. The work is real.
+**The markup is still per viewer, and that is not laziness.** Whether a cell
+arrives as a morph or an insert depends on what that browser already holds
+(`screen.heldCell`), so the patch genuinely differs between two people looking at
+the same rows. Only the data behind it is common. `renderScreen` is the one
+exception — its window markup is viewer-independent apart from the selection — so
+it caches its rendered halves too, above the same read.
 
-**The render is already viewer-independent, which is what makes the fix cheap.** Two
-viewers on the same window receive byte-identical element payloads — that is what
-the digest suppression already relies on. So the shape is: key a cache on
-`(sheetID, loRow, hiRow, dirty-set sequence, selection-independent)`, render once per
-distinct window per invalidation, and let every connection on that window deliver the
-same bytes. At N viewers on one window the cost goes from `N x render` to
-`1 x render + N x write`, which turns the table above into a flat line.
+**Invalidation is a mutation counter bumped by the actor**, which is the single
+point every write passes through, so a new write verb is covered without anyone
+remembering to add it. `TestEveryWriteVerbMovesTheVersion` drives all ten verbs
+through the real actor and insists the version moved; the failure it guards is not
+a slow page but every viewer being served a window that silently predates the
+edit. The handle pointer is part of the key as well, because a reaped id revived
+as a fresh sheet restarts its counter at zero and would otherwise collide with an
+entry cached at zero.
 
-Three things it has to get right, all of them already visible in the code:
-
-- **The window, not the connection, is the key.** `-buffer-bands 4` and a shared
-  scroll position mean viewers cluster hard onto a handful of distinct windows; the
-  cache is small and the hit rate is the whole point.
-- **`screen.heldMask` is per connection and cannot be shared.** Whether a patch is a
-  morph or an insert depends on what that browser already has. Either the shared
-  artefact is the rendered CELLS and the per-screen step is only the patch framing,
-  or connections that share a mask state share a cache entry.
-- **Selection and the `?at=` region are per screen** but are drawn by one overlay box
-  in the page shell, not per cell — so they do not fragment the key.
-
-Until it exists, the cap is the control: 64 streams is where a fast-typing burst
-(~10 commits/s) still fits inside a 2 vCPU box and the server's share of push latency
-stays under the network round trip.
+**What this does NOT justify yet: raising `StreamsTotal` back above 64.** The
+reads are flat now, but the per-viewer work that remains — building each patch,
+and writing it to each socket — still scales with N, and that was never separately
+measured. Raising the cap is its own measurement, not a corollary of this one.
 
 ## Bulk write performance
 

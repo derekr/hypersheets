@@ -151,6 +151,12 @@ type ServerOptions struct {
 
 // Server wires the registry, the bus and the store into the routes.
 type Server struct {
+	// cells caches the window READ, which is what every render path shares and
+	// where the contention was. windows caches the rendered halves on top of it
+	// for the one path whose markup is viewer-independent. See windowcache.go.
+	cells   *flightCache[windowKey, []Cell]
+	windows *flightCache[windowKey, windowHalves]
+
 	reg          *Registry
 	bus          *Bus
 	recalc       RecalcFunc
@@ -190,6 +196,8 @@ func NewServer(opts ServerOptions) *Server {
 		bb = 0
 	}
 	return &Server{
+		cells:        newFlightCache[windowKey, []Cell](),
+		windows:      newFlightCache[windowKey, windowHalves](),
 		reg:          opts.Registry,
 		bus:          opts.Bus,
 		recalc:       rc,
@@ -408,7 +416,10 @@ func (s *Server) handlePage(w http.ResponseWriter, r *http.Request) {
 	at = at.clampTo(rows)
 	viewLo, viewHi := anchorViewport(at, rows)
 	loRow, hiRow := s.bufferRows(rows, viewLo, viewHi)
-	cells, err := sh.WindowCtx(ctx, loRow, hiRow)
+	// Shared with the stream's renders and with anyone else opening the same
+	// link: a posted URL is opened by several people at once far more often than
+	// a sheet is edited.
+	cells, err := s.readWindow(ctx, sh, loRow, hiRow)
 	if err != nil {
 		span.RecordError(err)
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -1135,7 +1146,10 @@ func (s *Server) renderCellPatch(ctx context.Context, scr *screen, refs []CellRe
 	have := make(map[CellRef]Cell, len(refs))
 	read := 0
 	for _, run := range rowRuns(rows, cellRunGap, cellRunMax) {
-		got, rerr := sh.WindowCtx(ctx, run.Lo, run.Hi)
+		// Shared: every viewer woken by one edit wants the same rows, so the
+		// first to arrive does the read and the rest wait on it rather than
+		// queueing another behind the same eight connections.
+		got, rerr := s.readWindow(ctx, sh, run.Lo, run.Hi)
 		if rerr != nil {
 			span.RecordError(rerr)
 			return cellPatch{}, rerr

@@ -250,6 +250,39 @@ func renderWindow(cells []Cell, loRow, hiRow int, sheetID string, sel selRange) 
 	return b.String()
 }
 
+// renderWindowParts is renderWindow with the selection left out, returned as the
+// two halves that surround it.
+//
+// The selection is the only part of a window that differs between two people
+// looking at the same rows — everything else, the gutter, the column rules, every
+// cell, is a pure function of the sheet and the range. Splitting there is what
+// lets one render serve every viewer on a window: the halves are cached, and each
+// screen pays only its own `head + selHTML(mine) + tail`.
+//
+// It is deliberately the same code as renderWindow rather than a parallel
+// implementation, because two renderers that agree today and drift tomorrow is
+// how a shared cache starts serving one viewer another viewer's grid.
+// TestRenderWindowPartsRejoinExactly pins them together.
+func renderWindowParts(cells []Cell, loRow, hiRow int, sheetID string) (head, tail string) {
+	loRow, nRows := clampWindow(cells, loRow, hiRow)
+
+	var h strings.Builder
+	h.Grow(nRows*36 + 512)
+	h.WriteString(`<div id="` + gridID + `"><div id="` + gutterID + `">`)
+	writeRowNums(&h, loRow, nRows)
+	h.WriteString(`</div><div id="` + bufferID + `">`)
+	writeColRules(&h)
+
+	var t strings.Builder
+	t.Grow(len(cells)/2*30 + editorBytes + len(sheetID) + 512)
+	writeCells(&t, cells, loRow, nRows)
+	t.WriteString(`</div>`)
+	t.WriteString(cellOverlayHTML(html.EscapeString(sheetID)))
+	t.WriteString(`</div>`)
+
+	return h.String(), t.String()
+}
+
 // clampWindow puts [loRow,hiRow] inside the grid and shortens it to whatever the
 // caller's cell rectangle actually covers.
 //

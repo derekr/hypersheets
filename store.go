@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"go.opentelemetry.io/otel/attribute"
@@ -317,6 +318,14 @@ type Sheet struct {
 	db     *sql.DB
 	closed bool
 
+	// ver counts mutations to this sheet, so a reader can ask "is what I cached
+	// still current?" without touching the database. Bumped by the actor after
+	// every write command, which is the one place every mutation passes through,
+	// so a new write verb is covered without remembering to add it. It is a
+	// cache key, never durable state: a restart resets it and the caches that
+	// read it are in the same process.
+	ver atomic.Uint64
+
 	// depLo and depHi are the two directions of dependentsSQL, prepared once
 	// for the life of the handle. The reverse dependency walk runs once per hop
 	// of every cascade, and preparing the three-arm compound dominates it:
@@ -409,6 +418,13 @@ func (s *Sheet) Path() string { return s.path }
 // because an extent that only ever grows leaves the scrollbar describing rows
 // emptied long ago. It is the prefix sum the band index maintains anyway, so
 // there is nothing cached to invalidate.
+// Version is the sheet's mutation counter. Two reads that see the same value
+// are looking at the same content.
+func (s *Sheet) Version() uint64 { return s.ver.Load() }
+
+// bumpVersion is called by the actor after a write command.
+func (s *Sheet) bumpVersion() { s.ver.Add(1) }
+
 func (s *Sheet) Rows() int {
 	s.idxMu.RLock()
 	defer s.idxMu.RUnlock()

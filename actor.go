@@ -162,6 +162,13 @@ func (a *Actors) exec(sheetID string, cmd actorCmd) (err error) {
 	if oerr != nil {
 		return oerr
 	}
+	// Every mutation in the application arrives here, so this is where the
+	// sheet's version moves. Bumped unconditionally, including when the command
+	// failed: a write that rolled back leaves the content unchanged, but a
+	// spurious bump only costs a cache miss whereas a missed one serves stale
+	// bytes. Callers that read without writing go through OpenSheet and never
+	// reach this function.
+	defer sh.bumpVersion()
 	return cmd.fn(sh)
 }
 

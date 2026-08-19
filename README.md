@@ -121,9 +121,11 @@ first thing to change for anything else.
 
 ## Where it falls short
 
-- **Every viewer renders its own window.** At 64 concurrent connections that is
-  measurably the wrong shape — the same window is rendered once per viewer. The fix
-  (render once per distinct window, share it) is the top item in `BACKLOG.md`.
+- **Each viewer still builds its own patch.** The database read behind it is
+  shared — one edit costs one read whether two people or a hundred are watching —
+  but whether a cell arrives as a morph or an insert depends on what that browser
+  already holds, so the markup is genuinely per viewer. Whether that justifies
+  raising the connection cap has not been measured.
 - 26 columns, A–Z. Growing that axis is a render-layer change, not a storage one.
 - Formulas cover arithmetic, ranges and the common aggregates. It is not Excel.
 - No authentication, no sharing model, no export.

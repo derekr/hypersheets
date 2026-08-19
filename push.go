@@ -31,24 +31,50 @@ func (s *Server) renderScreen(ctx context.Context, scr *screen, sel selRange) (s
 		span.RecordError(err)
 		return "", nil, err
 	}
-	cells, err := sh.WindowCtx(ctx, lo, hi)
+
+	// The read and the render happen once per (window, sheet version) however
+	// many viewers want them; everyone after the first waits on that one render
+	// rather than queueing another database read behind it. See windowcache.go.
+	//
+	// The version is read BEFORE the render and travels with the entry, so a
+	// write landing mid-render produces a cache miss next time rather than a
+	// window that is silently one edit behind.
+	ver := sh.Version()
+	h, err := s.windows.get(ctx, windowKey{scr.sheetID, lo, hi}, sh, ver,
+		func(ctx context.Context) (windowHalves, error) {
+			cells, rerr := s.readWindow(ctx, sh, lo, hi)
+			if rerr != nil {
+				return windowHalves{}, rerr
+			}
+			_, hspan := tracer.Start(ctx, "html.render")
+			head, tail := renderWindowParts(cells, lo, hi, scr.sheetID)
+			m := maskOf(cells, hi-lo+1)
+			hspan.SetAttributes(
+				attribute.Int("bytes", len(head)+len(tail)),
+				attribute.Int("rows", hi-lo+1),
+				attribute.Int("cells", len(cells)),
+				attribute.Int("cells_emitted", countMask(m)),
+			)
+			hspan.End()
+			return windowHalves{head: head, tail: tail, mask: m}, nil
+		})
 	if err != nil {
 		span.RecordError(err)
 		return "", nil, err
 	}
+	head, tail, mask := h.head, h.tail, h.mask
 
-	_, hspan := tracer.Start(ctx, "html.render")
-	html := renderWindow(cells, lo, hi, scr.sheetID, sel)
-	mask := maskOf(cells, hi-lo+1)
-	hspan.SetAttributes(
+	// The selection is this viewer's own, and is the only part of a window that
+	// differs between two people looking at the same rows.
+	html := head + selHTML(sel) + tail
+
+	rh, rm, rw := s.cells.stats()
+	span.SetAttributes(
 		attribute.Int("bytes", len(html)),
-		attribute.Int("rows", hi-lo+1),
-		attribute.Int("cells", len(cells)),
-		attribute.Int("cells_emitted", countMask(mask)),
+		attribute.Int64("read.hits", int64(rh)),
+		attribute.Int64("read.misses", int64(rm)),
+		attribute.Int64("read.waits", int64(rw)),
 	)
-	hspan.End()
-
-	span.SetAttributes(attribute.Int("bytes", len(html)))
 	return html, mask, nil
 }
 
@@ -99,7 +125,7 @@ func (s *Server) renderDelta(ctx context.Context, scr *screen, d windowDiff) (de
 		if r.empty() {
 			return nil, nil
 		}
-		got, rerr := sh.WindowCtx(ctx, r.Lo, r.Hi)
+		got, rerr := s.readWindow(ctx, sh, r.Lo, r.Hi)
 		if rerr != nil {
 			return nil, rerr
 		}
