@@ -85,29 +85,28 @@ fan-out, not the write loop. The column/row style cascade removes the most commo
 reason to hit the cap (styling a whole column is now one record), which lowers the
 urgency considerably.
 
-## Variable row heights
+## Variable row heights — DONE
 
-Manual row resize, then fit-to-contents. The 22px constant is load-bearing in ~8 places
-(scroll handler, hit-testing, editor position, active-cell box, selection box, keyboard
-reveal, container height, the grid-line gradient).
+**Built**, in the four steps SPIKE-AXIS-CONFIG.md recommended: one strip per row,
+per-row heights in storage, the drag, and then wrapping with fit-to-contents.
 
-**The structure already exists**: offset = `row × defaultHeight + Σ(deltas before row)`,
-and the prefix-sum-over-bands shape is exactly what `bands.nrows` already does for the
-extent. Heights go in the `rows` table keyed by storage key `k`, which the cascade work
-is already creating with room for a `height` column.
+A row's top is a prefix sum over the resized rows rather than a multiplication, on
+both sides — `--t`/`--hr` in CSS with the old multiplication as the fallback, so a
+sheet nobody has resized emits no geometry at all, and `topOf`/`rowAtY` over sorted
+pairs on the client. Only deviating rows get a rule, so it is O(resized rows), never
+O(cells).
 
-**Rendering gets simpler, not harder**: ship `--y` as an absolute pixel offset instead
-of `--r` and the client does no arithmetic at all. Hit-testing still needs a pixel→row
-map (ship the buffer's exceptions, not every boundary). The horizontal grid-line
-`repeating-linear-gradient` is the casualty — try a server-generated multi-stop gradient
-before per-row elements.
+**Autofit was the one genuine crack in the thesis, and it stayed a crack**: the server
+has no font metrics, so the client measures and sends the result through the same
+`rowheight` command a drag uses. There is no "automatic" height in the store — a
+fitted row is an ordinary resized row afterwards. Two things that were not obvious
+going in: fitting means nothing until cells can wrap, so wrap had to ship first as a
+level default in the style cascade; and `scrollHeight` never reports less than the box
+it is read from, so measuring in place can only ever grow a row.
 
-**Manual resize reuses the guide line** (`T.gdShow`) already built for both axes.
-
-**Autofit is the one genuine crack in the thesis**: the server cannot know rendered text
-height without a layout engine. The honest design is *measurement is a client
-capability, height is server state* — the client measures and sends it as a command.
-That is the same shape as the editor, where only the client knows what was typed.
+**Still open on this axis**: column autofit. Same argument, but the server would have
+to nominate candidate cells for the client to measure, since the widest cell in a
+column is usually outside the buffered window.
 
 ## Conditional formatting
 

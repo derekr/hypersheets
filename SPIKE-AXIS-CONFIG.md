@@ -1,5 +1,12 @@
 # Spike — variable row heights, and axis config as a layer
 
+> **Outcome: all three recommended steps shipped.** Strips and axis backgrounds,
+> then variable heights with the drag, then wrapping and fit-to-contents. The
+> row-groups arm of the measurement below was *reversed* on a second run against
+> a buffer that actually held data — see the note under the table. What shipped
+> is presentation-only strips at a flat pitch, which is the arrangement the
+> corrected measurement favours by 7.8×.
+
 ## The reframing
 
 Row height, column width, row background and column background are all the same
@@ -117,7 +124,7 @@ row strips flowing in document order inside a translated container, the browser
 computes most positions itself and the arithmetic is only needed for
 scroll→row and the container height.
 
-## Fit to contents cannot be computed on the server
+## Fit to contents cannot be computed on the server — and does not
 
 The server has no font metrics. Fit-to-contents is a **client measurement
 committed like a manual resize** — measure, then send the same `rowheight`
@@ -128,6 +135,14 @@ originates a layout fact.
 It also has a prerequisite: fitting to contents means nothing while cells are
 `white-space: nowrap; overflow: hidden`. **Wrapping is a separate feature and has
 to come first** — and it is itself axis config, a default for the row.
+
+Both held on contact. Wrap became a field on `Style`, so it inherited the
+three-level cascade for free and "wrap this column" is one record. Fit is a
+double-click on the row grip that measures the buffered cells and posts the
+result to the same `rowheight` endpoint the drag posts to. One thing the spike
+did not anticipate: the measurement has to release the row's height first, since
+`scrollHeight` never reports less than the box it is read from — measuring in
+place would have made fit a grow-only operation.
 
 ## What this touches, and what it gets for free
 

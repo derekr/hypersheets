@@ -250,7 +250,8 @@ func renderWindow(cells []Cell, loRow, hiRow int, sheetID string, sel selRange) 
 	b.WriteString(`<div id="` + gridID + `"><div id="` + gutterID + `" data-on:pointerdown="` +
 		rzRowDownExpr + `" data-on:pointermove="` + rzRowMoveExpr +
 		`" data-on:pointerup="` + rzRowUpExpr(sheetID) +
-		`" data-on:pointercancel="` + rzRowCancelExpr + `">`)
+		`" data-on:pointercancel="` + rzRowCancelExpr +
+		`" data-on:dblclick="` + rzRowFitExpr(sheetID) + `">`)
 	writeRowNums(&b, loRow, nRows)
 	b.WriteString(`</div><div id="` + bufferID + `">`)
 	writeColRules(&b)
@@ -284,7 +285,8 @@ func renderWindowParts(cells []Cell, loRow, hiRow int, sheetID string) (head, ta
 	h.WriteString(`<div id="` + gridID + `"><div id="` + gutterID + `" data-on:pointerdown="` +
 		rzRowDownExpr + `" data-on:pointermove="` + rzRowMoveExpr +
 		`" data-on:pointerup="` + rzRowUpExpr(sheetID) +
-		`" data-on:pointercancel="` + rzRowCancelExpr + `">`)
+		`" data-on:pointercancel="` + rzRowCancelExpr +
+		`" data-on:dblclick="` + rzRowFitExpr(sheetID) + `">`)
 	writeRowNums(&h, loRow, nRows)
 	h.WriteString(`</div><div id="` + bufferID + `">`)
 	writeColRules(&h)
@@ -457,6 +459,10 @@ var rowGroupMode = os.Getenv("SS_ROW_GROUPS") == "1"
 //
 // Strips come before the cells in document order, so cells paint over them.
 const stripClass = "rs"
+
+// measureClass releases a cell's height for the length of one fit-to-contents
+// measurement. See T.fitR.
+const measureClass = "mz"
 
 func writeRowStrips(b *strings.Builder, loRow, nRows int) {
 	for i := 0; i < nRows; i++ {
@@ -1191,6 +1197,7 @@ header .tb .fs{height:24px;max-width:7.5rem;border:1px solid #dadce0;border-radi
 #` + bufferID + ` b.t{text-align:left}
 #` + bufferID + ` b.f{color:#0b57d0}
 #` + bufferID + ` b.e{color:#c5221f;background:#fce8e6;text-align:left}
+#` + bufferID + ` b.` + measureClass + `{height:auto}
 #` + bufferID + ` b.` + pendClass + `{color:#5f6368;font-style:italic;text-align:left}
 #` + bufferID + ` b.` + flightClass + `{box-shadow:inset 2px 0 0 #f9ab00}
 #` + bufferID + ` b.` + failClass + `{box-shadow:inset 2px 0 0 #d93025}
@@ -1402,6 +1409,19 @@ func rzRowUpExpr(sheetID string) string {
 }
 
 const rzRowCancelExpr = `if(window.__ss)window.__ss.rzCancelR()`
+
+// Fit to contents, on the same five pixels the drag uses and by the same
+// convention every spreadsheet has: double-click the edge. It commits through
+// the resize endpoint because a fitted height is a height — the store has no
+// notion of "automatic", so a row that has been fitted stays where it was put
+// until something fits it again.
+func rzRowFitExpr(sheetID string) string {
+	return `const t=evt.target;if(t.tagName!=='B'||!t.parentElement||t.parentElement.id!=='` + gutterID + `')return;` +
+		`const q=t.getBoundingClientRect();if(evt.clientY<q.bottom-` + strconv.Itoa(rowGripPx) + `)return;` +
+		`evt.preventDefault();if(!window.__ss)return;const rw=+t.style.getPropertyValue('--r');` +
+		`$rr=rw;$rh=window.__ss.fitR(rw);` +
+		`@post('/s/` + sheetID + `/rowheight',{requestCancellation:'disabled'})`
+}
 
 // rowGripPx is how tall the resize band at the bottom of a row number is.
 const rowGripPx = 5
@@ -2285,7 +2305,29 @@ T.rzStartR=function(r,y,h){rzR=r;rzYy=y;rzHh=h;T.gdShow('y',y);};
 T.rzAtR=function(y){var v=rzHh+(y-rzYy);return v<MINH?MINH:(v>MAXH?MAXH:v);};
 T.rzMoveR=function(y){if(rzR<0)return;T.gdMove(rzYy+(T.rzAtR(y)-rzHh));};
 T.rzEndR=function(y){if(rzR<0)return null;var r=rzR,h=T.rzAtR(y);
- rzR=-1;T.gdHide();return {r:r,h:h};};
+ rzR=-1;T.gdHide();return h===rzHh?null:{r:r,h:h};};
+// The one layout fact the client originates. The server has no font metrics, so
+// the height a row needs is measurable only where the text is laid out — and
+// then it travels as an ordinary resize command, which is why fitting and
+// dragging arrive at the store through the same door.
+//
+// Only the buffered rows can be measured, and that is exactly the set this can
+// be asked about: the gesture is a double-click on a row's own number.
+//
+// The measuring class rather than scrollHeight, and it is the difference
+// between fitting and only ever growing: scrollHeight never reports less than
+// the box it is measured in, so a row someone has made tall would stay tall no
+// matter what it held. Releasing the height first is what lets a fit shrink one.
+// A class rather than an inline height, because the row level of the cascade
+// matches on the literal style attribute (rowVarDecl) and writing to it here
+// would drop the row's own styling for the length of the measurement.
+T.fitR=function(r){var d='--r:'+r,h=0,i,
+ q=document.querySelectorAll('#` + bufferID + ` b[style="'+d+'"],#` + bufferID + ` b[style^="'+d+';"]');
+ for(i=0;i<q.length;i++)q[i].classList.add('` + measureClass + `');
+ for(i=0;i<q.length;i++)if(q[i].offsetHeight>h)h=q[i].offsetHeight;
+ for(i=0;i<q.length;i++)q[i].classList.remove('` + measureClass + `');
+ h=h?h+1:RH;
+ return h<MINH?MINH:(h>MAXH?MAXH:h);};
 T.rzCancelR=function(){rzR=-1;T.gdHide();};
 T.rzLive=function(){return rzC;};
 T.anchorRow=+((vp&&vp.dataset.ar)||0);
