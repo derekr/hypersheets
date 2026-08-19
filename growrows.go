@@ -117,7 +117,7 @@ func growRowsHTML(sheetID string) string {
 		// `+$` coerces: data-bind on a number input hands back a number while the
 		// signal holds one, but an emptied box is `''`, and a string in an int
 		// field would be a 400 from ReadSignals rather than the default.
-		`',mn:+$` + growSignal + `}})">Add</button>` +
+		`',mn:+$` + growSignal + `},requestCancellation:'disabled'})">Add</button>` +
 		`<input id="` + growCountID + `" type="number" min="1" max="` +
 		strconv.Itoa(growRowsMax) + `" step="100" data-bind="` + growSignal +
 		`" aria-label="how many rows to add">` +

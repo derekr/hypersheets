@@ -1204,13 +1204,43 @@ const rzDownExpr = `const t=evt.target;if(t.tagName!=='I')return;evt.preventDefa
 const rzMoveExpr = `if(window.__ss)window.__ss.rzMove(evt.clientX)`
 
 // rzUpExpr commits, and it is the only moment in the gesture that touches a
-// signal or the network. It posts from `#cols`, which lives in the page shell
+// signal or the network.
+//
+// IT WRITES THE COLUMN'S OWN WIDTH SIGNAL, and the switch that does it is the
+// point rather than clumsiness. The optimistic width used to live in `$rc`/`$rw`
+// — one slot shared by all 26 columns — and `--w-N` read it only while `$rc`
+// still pointed at N. So a resized column held its new width exactly until the
+// next column was dragged, and then fell back to whatever the server had last
+// said. Any commit whose confirming push was lost, refused, or simply slower
+// than the next drag left an earlier column snapping to a stale width, with
+// nothing on screen connecting the two events. Writing `$_wN` directly makes the
+// optimistic value per column and durable; the server's push then confirms the
+// same number instead of being the only thing holding it up.
+//
+// `$rc`/`$rw` remain, as the payload this POST carries and nothing else. It posts from `#cols`, which lives in the page shell
 // and is never inside a patch region — the same rule `#nav` follows: a fetch
 // action's request cancellation is keyed on the element, so issuing it from
 // anything the stream can remove or replace is how you abort your own SSE.
+//
+// IT OPTS OUT OF CANCELLATION, for the reason the clear, fill, paste and style
+// commands do. Every resize posts from this one element, so under the default
+// `auto` a second resize aborts the first — and resizing two columns is two
+// operations, not a correction of one. The abort is invisible at the moment it
+// happens and shows up later: the abandoned column keeps its optimistic width
+// only while `$rc` still points at it, so it snaps back to its stale stored
+// width as soon as another column is dragged. Reported as "I resize the sixth
+// one and one of the earlier ones changes size".
 func rzUpExpr(sheetID string) string {
+	var set strings.Builder
+	set.WriteString(`switch(v.c){`)
+	for c := 0; c < MaxCols; c++ {
+		i := strconv.Itoa(c)
+		set.WriteString(`case ` + i + `:$_w` + i + `=v.w;break;`)
+	}
+	set.WriteByte('}')
 	return `if(!window.__ss)return;const v=window.__ss.rzEnd(evt.clientX);if(!v)return;` +
-		`$rc=v.c;$rw=v.w;@post('/s/` + sheetID + `/colwidth')`
+		set.String() + `$rc=v.c;$rw=v.w;` +
+		`@post('/s/` + sheetID + `/colwidth',{requestCancellation:'disabled'})`
 }
 
 const rzCancelExpr = `if(window.__ss)window.__ss.rzCancel();$rc=-1`
@@ -1293,7 +1323,7 @@ func colWidthStyleExpr() string {
 			b.WriteByte(',')
 		}
 		i := strconv.Itoa(c)
-		b.WriteString(`'` + colVar(c) + `':($rc===` + i + `?$rw:$_w` + i + `)+'px'`)
+		b.WriteString(`'` + colVar(c) + `':$_w` + i + `+'px'`)
 	}
 	// Stringified because setProperty takes a string and a bare number would
 	// reach CSS as a value the `calc()` above cannot use.
@@ -1797,7 +1827,7 @@ func menuHTML(sheetID string) string {
 		// chip at all, because it makes a working page look broken.
 		return `<button class="` + pendingWriteCl + `" data-on:click="$mop='` + op + `';` +
 			pendingRaise(`Reshaping the sheet…`) +
-			`@post('/s/` + sheetID + `/` + path + `')">` + label + `</button>`
+			`@post('/s/` + sheetID + `/` + path + `',{requestCancellation:'disabled'})">` + label + `</button>`
 	}
 	return `<div id="` + menuID + `" data-show="$mo" data-style="{top:` + "`${$my}px`" + `,left:` + "`${$mx}px`" + `}"` +
 		` data-on:click__window="$mo=false">` +
