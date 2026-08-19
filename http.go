@@ -243,6 +243,7 @@ func (s *Server) Routes() http.Handler {
 	// reason `#cl`/`#fl`/`#pv` exist for — see styleui.go.
 	mux.HandleFunc("POST /s/{sheetID}/style", s.handleStyle)
 	mux.HandleFunc("POST /s/{sheetID}/colwidth", s.handleColWidth)
+	mux.HandleFunc("POST /s/{sheetID}/rowheight", s.handleRowHeight)
 	mux.HandleFunc("POST /s/{sheetID}/rows", s.handleRows)
 	mux.HandleFunc("POST /s/{sheetID}/cols", s.handleCols)
 	// The hashed, immutable assets: this page's own script bundle, the vendored
@@ -441,8 +442,16 @@ func (s *Server) handlePage(w http.ResponseWriter, r *http.Request) {
 	// The sheet's stylesheet goes in the first byte: a styled cell carries only
 	// its class, so a page whose rules arrived a round trip later would paint every
 	// styled cell unstyled and then correct itself.
+	// The heights go in the first byte for the same reason the stylesheet does:
+	// the CSS places the rows correctly either way, but the client's hit testing
+	// is arithmetic, and a page that had to wait a round trip for them would
+	// answer a click on a resized sheet with the wrong cell.
+	allHeights, hErr := sh.RowHeights(0, rows-1)
+	if hErr != nil {
+		allHeights = nil
+	}
 	shell := pageShellWidths(sheetID, loRow, hiRow, grid, at, widths, rows,
-		sheetStyleCSS(sh, loRow, hiRow))
+		sheetStyleCSS(sh, loRow, hiRow), allHeights)
 	span.SetAttributes(
 		attribute.String("sheet.id", sheetID),
 		attribute.Int("sheet.rows", rows),
@@ -1792,6 +1801,77 @@ func (s *Server) handleColWidth(w http.ResponseWriter, r *http.Request) {
 	obsLog.InfoContext(ctx, "colwidth",
 		"sheet", sheetID, "conn", sig.Conn, "name", s.authorName(sig.Conn),
 		"col", sig.Rc, "width", px, "screens", woke,
+		"command_ms", msf(noteCommandNow(started)))
+	s.respondCommand(w)
+}
+
+// ─── POST /s/{sheetID}/rowheight ──────────────────────────────────────────────
+
+// rowResizeSignals is what a row drag commits.
+type rowResizeSignals struct {
+	Rr int `json:"rr"` // the row being resized
+	Rh int `json:"rh"` // its new height in px, as the drag left it
+
+	Conn string `json:"conn"`
+}
+
+// handleRowHeight is the row's answer to handleColWidth.
+//
+// A resize needs no grid render. Every row's top and height is expressed in the
+// per-window stylesheet, which the push re-derives and compares, so what reaches
+// a viewer is one `<style>` patch of a few dozen bytes rather than a window of
+// markup. That is the reason the geometry lives in CSS rather than in the cells'
+// own style attributes, where the same two numbers would be repeated across
+// every cell of the row.
+func (s *Server) handleRowHeight(w http.ResponseWriter, r *http.Request) {
+	sheetID := r.PathValue("sheetID")
+	if err := validSheetID(sheetID); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	var sig rowResizeSignals
+	if err := datastar.ReadSignals(r, &sig); err != nil {
+		http.Error(w, "read signals: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	if sig.Rr < 0 || sig.Rr >= RowCeiling {
+		http.Error(w, "row out of range", http.StatusBadRequest)
+		return
+	}
+
+	ctx, span := tracer.Start(r.Context(), "rowheight.command")
+	defer span.End()
+	started := time.Now()
+	px := ClampRowHeight(sig.Rh)
+	span.SetAttributes(
+		attribute.String("sheet.id", sheetID),
+		attribute.Int("row", sig.Rr),
+		attribute.Int("height.requested", sig.Rh),
+		attribute.Int("height.stored", px),
+	)
+
+	grew, err := writeSheetRows(sheetID, func(sh *Sheet) error {
+		return sh.SetRowHeight([]int{sig.Rr}, px)
+	})
+	if err != nil {
+		span.RecordError(err)
+		status := http.StatusInternalServerError
+		if errors.Is(err, ErrBadRef) || errors.Is(err, ErrBadHeight) {
+			status = http.StatusBadRequest
+		}
+		obsLog.WarnContext(ctx, "rowheight.failed",
+			"sheet", sheetID, "conn", sig.Conn, "name", s.authorName(sig.Conn),
+			"row", sig.Rr, "height", px, "err", err.Error())
+		http.Error(w, err.Error(), status)
+		return
+	}
+
+	woke := s.markSheetWidths(ctx, sheetID)
+	s.extentChanged(ctx, sheetID, grew)
+	span.SetAttributes(attribute.Int("screens.woken", woke))
+	obsLog.InfoContext(ctx, "rowheight",
+		"sheet", sheetID, "conn", sig.Conn, "name", s.authorName(sig.Conn),
+		"row", sig.Rr, "height", px, "screens", woke,
 		"command_ms", msf(noteCommandNow(started)))
 	s.respondCommand(w)
 }

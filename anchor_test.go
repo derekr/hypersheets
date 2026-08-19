@@ -595,7 +595,7 @@ func TestPageShellClampsAnAnchorPastTheEnd(t *testing.T) {
 	rows := 10000
 	at = at.clampTo(rows)
 	viewLo, viewHi := anchorViewport(at, rows)
-	page := pageShellWidths("demo", viewLo, viewHi, "", at, nil, rows, "")
+	page := pageShellWidths("demo", viewLo, viewHi, "", at, nil, rows, "", nil)
 	if strings.Contains(page, "115000") {
 		t.Error("the shell still mentions row 115000 somewhere; the clamp is not covering every consumer")
 	}

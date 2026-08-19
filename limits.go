@@ -643,7 +643,7 @@ func classify(method, path string) (reqClass, string) {
 			return classOther, ""
 		}
 		switch verb {
-		case "cell", "clear", "fill", "paste", "style", "colwidth", "rows", "cols":
+		case "cell", "clear", "fill", "paste", "style", "colwidth", "rowheight", "rows", "cols":
 			return classWrite, id
 		case "viewport", "sel":
 			return classNav, id

@@ -154,7 +154,7 @@ func TestStyleRulesCanBeatTheKindRules(t *testing.T) {
 		t.Errorf("\n got %q\nwant %q", css, want)
 	}
 	// And the sheet's stylesheet comes AFTER the build's in the document.
-	page := pageShellWidths("demo", 0, 3, "", zeroAnchor(), nil, DefaultRows, css)
+	page := pageShellWidths("demo", 0, 3, "", zeroAnchor(), nil, DefaultRows, css, nil)
 	iGrid := strings.Index(page, "#"+bufferID+" b.t{")
 	iSheet := strings.Index(page, want)
 	if iGrid < 0 || iSheet < 0 {
@@ -257,7 +257,7 @@ func TestAColumnFillPaintsTheWholeColumn(t *testing.T) {
 // something to morph over — the alternative is an append-or-morph decision on
 // the one path where getting it wrong means two stylesheets.
 func TestTheStyleSheetElementIsAlwaysPresent(t *testing.T) {
-	page := pageShellWidths("demo", 0, 3, "", zeroAnchor(), nil, DefaultRows, "")
+	page := pageShellWidths("demo", 0, 3, "", zeroAnchor(), nil, DefaultRows, "", nil)
 	if !strings.Contains(page, `<style id="`+styleSheetID+`"></style>`) {
 		t.Error("a sheet nobody has styled has no #sy to patch")
 	}
@@ -269,7 +269,7 @@ func TestTheStyleSheetElementIsAlwaysPresent(t *testing.T) {
 // `#cl`/`#fl`/`#pv` in opting out; `#se` is the other side of the same rule and
 // keeps `auto` deliberately, because a superseded selection is not a lost one.
 func TestStyleCommandHasItsOwnUncancellableIssuer(t *testing.T) {
-	page := pageShellWidths("demo", 0, 3, "", zeroAnchor(), nil, DefaultRows, "")
+	page := pageShellWidths("demo", 0, 3, "", zeroAnchor(), nil, DefaultRows, "", nil)
 	if !strings.Contains(page, `<div id="`+styleIssuerID+`" hidden data-on:`+styleEvent) {
 		t.Fatal("the style command has no issuer element of its own")
 	}
@@ -296,7 +296,7 @@ func TestStyleCommandHasItsOwnUncancellableIssuer(t *testing.T) {
 // The selection never rides up on an ordinary request: the four corner signals
 // are underscore-prefixed and the style command names the range explicitly.
 func TestStylingDoesNotPutTheSelectionInTheSignalSet(t *testing.T) {
-	page := pageShellWidths("demo", 0, 3, "", zeroAnchor(), nil, DefaultRows, "")
+	page := pageShellWidths("demo", 0, 3, "", zeroAnchor(), nil, DefaultRows, "", nil)
 	// The toolbar controls dispatch an event; they do not post.
 	tb := styleToolbarHTML()
 	if strings.Contains(tb, "@post") || strings.Contains(tb, "@get") {
@@ -337,7 +337,7 @@ func TestTheResizeDragWritesNoSignal(t *testing.T) {
 // transform, which is the only way to preview a resize without laying out the
 // buffer.
 func TestTheResizeGuideIsInertShellMarkup(t *testing.T) {
-	page := pageShellWidths("demo", 0, 3, "", zeroAnchor(), nil, DefaultRows, "")
+	page := pageShellWidths("demo", 0, 3, "", zeroAnchor(), nil, DefaultRows, "", nil)
 	if !strings.Contains(page, `<div id="`+guideID+`"></div>`) {
 		t.Fatal("the drag guide is missing from the page shell")
 	}

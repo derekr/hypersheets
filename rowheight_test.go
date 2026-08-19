@@ -2,6 +2,8 @@ package main
 
 import (
 	"errors"
+	"strconv"
+	"strings"
 	"testing"
 	"time"
 )
@@ -157,5 +159,108 @@ func TestAHeightFollowsItsRowThroughAnInsert(t *testing.T) {
 	}
 	if got[5] != 0 {
 		t.Errorf("row 5 kept a height it should have handed to row 8: %v", got)
+	}
+}
+
+func TestRowOffsetAccountsForRowsAbove(t *testing.T) {
+	sh := heightSheet(t)
+	if off, err := sh.RowOffset(10); err != nil || off != 10*rowHeightPx {
+		t.Fatalf("offset(10) = %d, %v; want %d on an unresized sheet", off, err, 10*rowHeightPx)
+	}
+	if err := sh.SetRowHeight([]int{2}, 62); err != nil { // +40
+		t.Fatal(err)
+	}
+	if err := sh.SetRowHeight([]int{20}, 62); err != nil { // below row 10, must not count
+		t.Fatal(err)
+	}
+	off, err := sh.RowOffset(10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := 10*rowHeightPx + 40; off != want {
+		t.Fatalf("offset(10) = %d, want %d: only rows ABOVE shift a row down", off, want)
+	}
+	// The resized row's own height must not count toward its own top.
+	if off, _ := sh.RowOffset(2); off != 2*rowHeightPx {
+		t.Errorf("offset(2) = %d, want %d: a row's own height is below its top", off, 2*rowHeightPx)
+	}
+}
+
+// ─── how geometry reaches the page ────────────────────────────────────────────
+
+// A sheet nobody has resized must emit no geometry at all. Everything lays out by
+// multiplying, exactly as before, and the feature costs nothing until used.
+func TestAUniformWindowEmitsNoGeometry(t *testing.T) {
+	if css := rowGeometryCSS(0, 249, 0, 250*rowHeightPx, 250, nil); css != "" {
+		t.Fatalf("an unresized window emitted %d bytes of geometry:\n  %s", len(css), css)
+	}
+}
+
+func TestGeometryPlacesEveryRowBelowAResize(t *testing.T) {
+	css := rowGeometryCSS(0, 5, 0, 0, 0, map[int]int{2: 70})
+	// Row 2 is where it always was, but 70 tall; every row after it has moved
+	// down by the 48px difference.
+	for _, want := range []string{
+		`{--t:44px;--hr:70px}`,  // row 2
+		`{--t:114px;--hr:22px}`, // row 3: 44 + 70
+		`{--t:136px;--hr:22px}`, // row 4
+	} {
+		if !strings.Contains(css, want) {
+			t.Errorf("missing %s in:\n  %s", want, css)
+		}
+	}
+	// Rows above the resize are untouched and emit nothing.
+	if strings.Contains(css, `{--t:0px`) || strings.Contains(css, `{--t:22px`) {
+		t.Errorf("a row above the resize emitted geometry it does not need:\n  %s", css)
+	}
+}
+
+// A window that starts below a resize inherits the shift as one number, so the
+// rules do not have to restate every row above it.
+func TestAWindowBelowAResizeStartsAtItsRealTop(t *testing.T) {
+	css := rowGeometryCSS(100, 102, 100*rowHeightPx+48, 0, 0, nil)
+	if want := `{--t:` + strconv.Itoa(100*rowHeightPx+48) + `px;--hr:22px}`; !strings.Contains(css, want) {
+		t.Errorf("window base not applied, want %s in:\n  %s", want, css)
+	}
+}
+
+func TestTheContainerGrowsWithTheRows(t *testing.T) {
+	css := rowGeometryCSS(0, 5, 0, 250*rowHeightPx+48, 250, map[int]int{2: 70})
+	if want := `#g{height:` + strconv.Itoa(250*rowHeightPx+48) + `px}`; !strings.Contains(css, want) {
+		t.Errorf("no container height rule (%s) in:\n  %s", want, css)
+	}
+	// And not when the sheet is still uniform.
+	if css := rowGeometryCSS(0, 5, 0, 250*rowHeightPx, 250, nil); strings.Contains(css, "#g{height:") {
+		t.Errorf("a uniform sheet restated its own height:\n  %s", css)
+	}
+}
+
+// The client binary-searches this, so it must be flat and sorted whatever order
+// the map iterates in.
+func TestHeightPairsAreFlatAndSorted(t *testing.T) {
+	got := rowHeightPairs(map[int]int{9: 40, 2: 70, 5: 50})
+	if got != "[2,70,5,50,9,40]" {
+		t.Fatalf("pairs = %s, want [2,70,5,50,9,40]", got)
+	}
+	if rowHeightPairs(nil) != "[]" {
+		t.Errorf("an unresized sheet must still emit a valid empty array")
+	}
+	// Stable across renders, or the shell's bytes change for no reason.
+	for i := 0; i < 6; i++ {
+		if again := rowHeightPairs(map[int]int{9: 40, 2: 70, 5: 50}); again != got {
+			t.Fatalf("encoding is not stable: %s then %s", got, again)
+		}
+	}
+}
+
+// The client's offset arithmetic is the half the server cannot check, so at least
+// pin that the page ships what that arithmetic needs.
+func TestTheShellShipsTheHeightsAndTheReader(t *testing.T) {
+	page := pageShellWidths("demo", 0, 9, "", zeroAnchor(), nil, DefaultRows, "", map[int]int{2: 70})
+	if !strings.Contains(page, heightSignal+":[2,70]") {
+		t.Error("the shell does not seed the resized rows")
+	}
+	if !strings.Contains(page, "setHeights") {
+		t.Error("nothing wires the height signal into the client")
 	}
 }

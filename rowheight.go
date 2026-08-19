@@ -189,3 +189,36 @@ func (s *Sheet) TotalHeight() (int, error) {
 	})
 	return total, err
 }
+
+// RowOffset is the pixel top of a display row: every row above it at the default,
+// plus the difference for those that are not.
+//
+// It is one aggregate over the keys above the row rather than a walk, because a
+// window can start at row 900,000 and the answer must not cost a row per row.
+func (s *Sheet) RowOffset(row int) (int, error) {
+	if row <= 0 {
+		return 0, nil
+	}
+	top := 0
+	err := s.use(func(db *sql.DB) error {
+		return s.readIndex(func(bi *bandIndex) error {
+			r := min(row, bi.rows)
+			top = r * rowHeightPx
+			if r == 0 {
+				return nil
+			}
+			var sum, n sql.NullInt64
+			err := db.QueryRow(
+				`SELECT SUM(height), COUNT(*) FROM rows WHERE k < ? AND height <> 0`,
+				bi.keyOf(r)).Scan(&sum, &n)
+			if err != nil {
+				return fmt.Errorf("row offset %d: %w", row, err)
+			}
+			if n.Valid && n.Int64 > 0 {
+				top += int(sum.Int64) - int(n.Int64)*rowHeightPx
+			}
+			return nil
+		})
+	})
+	return top, err
+}

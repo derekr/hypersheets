@@ -142,7 +142,7 @@ func cellRendered(c Cell) bool { return c.Kind != KindEmpty || c.Style != 0 }
 
 // extentEffectExpr keeps T.rows in step with the server's extent. One
 // subscription to one signal; no request, no DOM, no per-render cost.
-const extentEffectExpr = `if(window.__ss)window.__ss.setRows($_rows)`
+const extentEffectExpr = `if(window.__ss){window.__ss.setRows($_rows);window.__ss.setHeights($_rh)}`
 
 // ─── The morph hole ────────────────────────────────────────────────────────────
 //
@@ -690,7 +690,113 @@ func sheetStyleCSS(sh *Sheet, loRow, hiRow int) string {
 	if err != nil {
 		rows = nil
 	}
-	return cascadeCSS(rules, cols, rows)
+	css := cascadeCSS(rules, cols, rows)
+
+	// Geometry rides the same per-window stylesheet as the cascade: both are
+	// derived per screen on every push and compared against what that screen
+	// last held, so a window with no resized row patches nothing. It is appended
+	// rather than folded into cascadeCSS because a sheet with no styles at all
+	// still has geometry, and cascadeCSS returns early on an empty style table.
+	heights, herr := sh.RowHeights(loRow, hiRow)
+	if herr != nil {
+		return css
+	}
+	base, berr := sh.RowOffset(loRow)
+	if berr != nil {
+		return css
+	}
+	total, terr := sh.TotalHeight()
+	if terr != nil {
+		return css
+	}
+	return css + rowGeometryCSS(loRow, hiRow, base, total, sh.Rows(), heights)
+}
+
+// rowGeometryCSS sets `--t` and `--hr` for the rows in a window whose geometry
+// is not the uniform default.
+//
+// One rule per row, and it covers all three server-rendered element kinds at
+// once: the gutter's number, the row strip, and the cells. Everything else in
+// the stylesheet reads those two properties through a fallback, so a sheet with
+// no resized row emits nothing here and lays out by multiplication exactly as
+// before.
+//
+// It is O(rows in the buffer), not O(cells): a dense window has ten thousand
+// cells and two hundred and fifty rows. The cell rules cannot be avoided by
+// putting the numbers in the cells' style attributes, which would be the same
+// two numbers repeated across every cell of the row.
+//
+// A resize shifts every row below it, so the rules start at the first row whose
+// top has moved and run to the end of the window. baseTop is the window's own
+// top, which absorbs every resize ABOVE the window in one number.
+func rowGeometryCSS(loRow, hiRow, baseTop, totalH, rows int, heights map[int]int) string {
+	if hiRow < loRow {
+		return ""
+	}
+	var b strings.Builder
+	// The scroll container's height, when the sheet is no longer rows x pitch.
+	// It rides this stylesheet rather than a signal of its own because it moves
+	// exactly when the per-row rules below do, and `#sy` is emitted after the
+	// build's stylesheet so an equal-specificity rule here wins.
+	if totalH > 0 && totalH != rows*rowHeightPx {
+		px := strconv.Itoa(totalH) + "px"
+		b.WriteString(`#` + gridID + `{height:` + px + `}`)
+		b.WriteString(`#` + boxOverlayID + `,#pc{height:` + px + `}`)
+	}
+	top := baseTop
+	for r := loRow; r <= hiRow; r++ {
+		h := rowHeightPx
+		if v, ok := heights[r]; ok && v > 0 {
+			h = v
+		}
+		if top != r*rowHeightPx || h != rowHeightPx {
+			d := rowVarDecl(strconv.Itoa(r))
+			sel := `#` + gutterID + `>b[style="` + d + `"],` +
+				`#` + bufferID + `>i.` + stripClass + `[style="` + d + `"],` +
+				`#` + bufferID + ` b[style="` + d + `"],` +
+				`#` + bufferID + ` b[style^="` + d + `;"]`
+			b.WriteString(sel)
+			b.WriteString(`{--t:`)
+			b.WriteString(strconv.Itoa(top))
+			b.WriteString(`px;--hr:`)
+			b.WriteString(strconv.Itoa(h))
+			b.WriteString(`px}`)
+		}
+		top += h
+	}
+	return b.String()
+}
+
+// heightSignal carries the resized rows to the client.
+const heightSignal = "_rh"
+
+// rowHeightPairs encodes a sparse height map as a flat, row-sorted array.
+//
+// Flat pairs rather than an object because the client binary-searches it, and an
+// array of two-element arrays would be one allocation per resized row for the
+// same information. Sorted because the search depends on it and a Go map is not.
+func rowHeightPairs(heights map[int]int) string {
+	if len(heights) == 0 {
+		return "[]"
+	}
+	rows := make([]int, 0, len(heights))
+	for r := range heights {
+		rows = append(rows, r)
+	}
+	sort.Ints(rows)
+	var b strings.Builder
+	b.Grow(len(rows) * 12)
+	b.WriteByte('[')
+	for i, r := range rows {
+		if i > 0 {
+			b.WriteByte(',')
+		}
+		b.WriteString(strconv.Itoa(r))
+		b.WriteByte(',')
+		b.WriteString(strconv.Itoa(heights[r]))
+	}
+	b.WriteByte(']')
+	return b.String()
 }
 
 // cascadeCSS is sheetStyleCSS's body with the store taken out, so the three
@@ -1042,14 +1148,14 @@ header .tb .fs{height:24px;max-width:7.5rem;border:1px solid #dadce0;border-radi
 #cols b{position:absolute;top:0;right:6px;height:100%;opacity:0;color:#444746;font-weight:400;cursor:pointer}
 #cols span:hover b{opacity:.7}
 #cols b:hover{opacity:1}
-#` + gridID + `{position:relative;width:var(--tw);height:calc(var(--rows) * var(--rh))}
+#` + gridID + `{position:relative;width:var(--tw);height:var(--th,calc(var(--rows) * var(--rh)))}
 #` + gutterID + `{position:sticky;left:0;z-index:1;display:block;width:var(--hw);height:100%;background-color:var(--hd);box-shadow:inset -1px 0 0 var(--ln2);user-select:none}
-#` + gutterID + `>b{position:absolute;left:0;top:calc(var(--r) * var(--rh));width:var(--hw);height:var(--rh);line-height:calc(var(--rh) - 1px);color:#444746;font-weight:400;font-size:11px;text-align:center;border-bottom:1px solid var(--ln)}
+#` + gutterID + `>b{position:absolute;left:0;top:var(--t,calc(var(--r) * var(--rh)));width:var(--hw);height:var(--hr,var(--rh));line-height:calc(var(--rh) - 1px);color:#444746;font-weight:400;font-size:11px;text-align:center;border-bottom:1px solid var(--ln)}
 #` + gutterID + `>b.a{background:#d3e3fd;color:#0b57d0}
 #` + bufferID + `{position:absolute;top:0;left:0;width:var(--tw);height:100%;display:grid;grid-template-columns:` + gridTracks() + `;grid-template-rows:100%;user-select:none}
-#` + bufferID + `>i.` + stripClass + `{position:absolute;left:0;right:0;top:calc(var(--r) * var(--rh));height:var(--rh);border-bottom:1px solid var(--ln);pointer-events:none}
+#` + bufferID + `>i.` + stripClass + `{position:absolute;left:0;right:0;top:var(--t,calc(var(--r) * var(--rh)));height:var(--hr,var(--rh));border-bottom:1px solid var(--ln);pointer-events:none}
 #` + bufferID + `>i{grid-row:1;box-shadow:inset -1px 0 0 var(--ln);pointer-events:none}
-#` + bufferID + ` b{position:absolute;left:0;right:1px;top:calc(var(--r) * var(--rh));height:calc(var(--rh) - 1px);padding:0 4px;overflow:hidden;white-space:nowrap;font-weight:400;line-height:calc(var(--rh) - 1px);text-align:right;font-variant-numeric:tabular-nums}
+#` + bufferID + ` b{position:absolute;left:0;right:1px;top:var(--t,calc(var(--r) * var(--rh)));height:calc(var(--hr,var(--rh)) - 1px);padding:0 4px;overflow:hidden;white-space:nowrap;font-weight:400;line-height:calc(var(--rh) - 1px);text-align:right;font-variant-numeric:tabular-nums}
 #` + bufferID + ` b.t{text-align:left}
 #` + bufferID + ` b.f{color:#0b57d0}
 #` + bufferID + ` b.e{color:#c5221f;background:#fce8e6;text-align:left}
@@ -1058,7 +1164,7 @@ header .tb .fs{height:24px;max-width:7.5rem;border:1px solid #dadce0;border-radi
 #` + bufferID + ` b.` + failClass + `{box-shadow:inset 2px 0 0 #d93025}
 #` + bufferID + `>.` + groupClass + `{position:absolute;left:0;right:0;top:calc(var(--r) * var(--rh));height:calc(var(--rh) - 1px);display:grid;grid-template-columns:` + gridTracks() + `}
 #` + bufferID + `>.` + groupClass + `>b{position:relative;left:auto;right:auto;top:auto;height:100%;margin-right:1px}
-#` + selID + `{position:absolute;z-index:2;left:0;right:1px;top:calc(var(--r) * var(--rh));height:calc(var(--n) * var(--rh) - 1px);background:rgba(26,115,232,.14);box-shadow:inset 0 0 0 1px rgba(26,115,232,.45);pointer-events:none}
+#` + selID + `{position:absolute;z-index:2;left:0;right:1px;top:var(--t,calc(var(--r) * var(--rh)));height:calc(var(--sh,calc(var(--n) * var(--rh))) - 1px);background:rgba(26,115,232,.14);box-shadow:inset 0 0 0 1px rgba(26,115,232,.45);pointer-events:none}
 /* THE THREE OVERLAY GRIDS. One rule, one copy of the column tracks, and every
    positioned overlay on the page is a child of one of them — the editor and the
    active-cell outline (#oc, inside #g), the selection and the copy marquee (#ov,
@@ -1066,12 +1172,12 @@ header .tb .fs{height:24px;max-width:7.5rem;border:1px solid #dadce0;border-radi
    overlayGridCSS's note for why they are a grid rather than pixels. */
 #` + cellOverlayID + `,#` + boxOverlayID + `,#pc{position:absolute;left:0;width:var(--tw);display:grid;grid-template-columns:` + gridTracks() + `;grid-template-rows:100%;pointer-events:none}
 #` + cellOverlayID + `{top:0;height:100%}
-#` + boxOverlayID + `,#pc{top:var(--ch);z-index:2;height:calc(var(--rows) * var(--rh))}
-#` + cellOverlayID + `>*,#` + boxOverlayID + `>*,#pc>div{position:absolute;left:0;right:1px;top:calc(var(--r) * var(--rh))}
-#` + selBoxID + `{height:calc(var(--n) * var(--rh) - 1px);background:rgba(26,115,232,.14);box-shadow:inset 0 0 0 1px rgba(26,115,232,.45)}
-#` + copyBoxID + `{height:calc(var(--n) * var(--rh) - 1px);outline:2px dashed var(--bl);outline-offset:-2px}
-#` + editorID + `{left:-1px;right:auto;width:calc(100% + 2px);top:calc(var(--r) * var(--rh) - 1px);z-index:4;height:calc(var(--rh) + 2px);margin:0;padding:0 3px;border:2px solid var(--bl);border-radius:0;background:#fff;color:#202124;font:13px/1 Arial,Helvetica,sans-serif;text-align:right;outline:none;box-shadow:0 1px 3px rgba(60,64,67,.3);pointer-events:auto;user-select:text}
-#` + activeCellID + `{left:-1px;right:auto;width:calc(100% + 2px);top:calc(var(--r) * var(--rh) - 1px);z-index:3;height:calc(var(--rh) + 2px);border:2px solid var(--bl)}
+#` + boxOverlayID + `,#pc{top:var(--ch);z-index:2;height:var(--th,calc(var(--rows) * var(--rh)))}
+#` + cellOverlayID + `>*,#` + boxOverlayID + `>*,#pc>div{position:absolute;left:0;right:1px;top:var(--t,calc(var(--r) * var(--rh)))}
+#` + selBoxID + `{height:calc(var(--sh,calc(var(--n) * var(--rh))) - 1px);background:rgba(26,115,232,.14);box-shadow:inset 0 0 0 1px rgba(26,115,232,.45)}
+#` + copyBoxID + `{height:calc(var(--sh,calc(var(--n) * var(--rh))) - 1px);outline:2px dashed var(--bl);outline-offset:-2px}
+#` + editorID + `{left:-1px;right:auto;width:calc(100% + 2px);top:calc(var(--t,calc(var(--r) * var(--rh))) - 1px);z-index:4;height:calc(var(--hr,var(--rh)) + 2px);margin:0;padding:0 3px;border:2px solid var(--bl);border-radius:0;background:#fff;color:#202124;font:13px/1 Arial,Helvetica,sans-serif;text-align:right;outline:none;box-shadow:0 1px 3px rgba(60,64,67,.3);pointer-events:auto;user-select:text}
+#` + activeCellID + `{left:-1px;right:auto;width:calc(100% + 2px);top:calc(var(--t,calc(var(--r) * var(--rh))) - 1px);z-index:3;height:calc(var(--hr,var(--rh)) + 2px);border:2px solid var(--bl)}
 #mn{position:fixed;z-index:9;min-width:11rem;padding:6px 0;border:1px solid #dadce0;border-radius:4px;background:#fff;box-shadow:0 2px 6px 2px rgba(60,64,67,.15);font-size:13px}
 #mn button{display:block;width:100%;padding:7px 14px;border:0;background:none;color:#202124;font:13px/1 Arial,Helvetica,sans-serif;text-align:left;cursor:pointer}
 #mn button:hover{background:#f1f3f4}
@@ -1087,10 +1193,10 @@ header .ro{flex:0 0 auto;overflow:visible;color:#b06000;border:1px solid #e0c088
 header .pl{display:flex;flex:0 0 auto;gap:3px;align-items:center}
 header .pl i{display:inline-flex;align-items:center;justify-content:center;width:22px;height:22px;border-radius:50%;background:hsl(var(--h) 68% 45%);color:#fff;font:700 10px/1 Arial,Helvetica,sans-serif;font-style:normal;letter-spacing:.2px;cursor:default}
 header .pl i.me{box-shadow:0 0 0 2px #fff,0 0 0 3px hsl(var(--h) 68% 45%)}
-#pc>.pu{height:calc(var(--rh) - 1px);box-shadow:inset 0 0 0 2px hsl(var(--h) 68% 45%)}
+#pc>.pu{height:calc(var(--hr,var(--rh)) - 1px);box-shadow:inset 0 0 0 2px hsl(var(--h) 68% 45%)}
 #pc>.pu>b{position:absolute;left:-2px;bottom:100%;margin-bottom:1px;padding:1px 5px;border-radius:3px;background:hsl(var(--h) 68% 45%);color:#fff;font:500 10px/13px Arial,Helvetica,sans-serif;white-space:nowrap}
-#pc>.pb{height:calc(var(--n) * var(--rh) - 1px);background:hsl(var(--h) 68% 45% / .12);box-shadow:inset 0 0 0 1px hsl(var(--h) 68% 45% / .45)}
-#pc>.pf{height:calc(var(--rh) - 1px);background:hsl(var(--h) 68% 45% / .38);box-shadow:inset 0 0 0 1px hsl(var(--h) 68% 45% / .6);animation:ssfl ` + strconv.Itoa(int(attributionTTL/time.Millisecond)) + `ms linear var(--d) forwards}
+#pc>.pb{height:calc(var(--sh,calc(var(--n) * var(--rh))) - 1px);background:hsl(var(--h) 68% 45% / .12);box-shadow:inset 0 0 0 1px hsl(var(--h) 68% 45% / .45)}
+#pc>.pf{height:calc(var(--hr,var(--rh)) - 1px);background:hsl(var(--h) 68% 45% / .38);box-shadow:inset 0 0 0 1px hsl(var(--h) 68% 45% / .6);animation:ssfl ` + strconv.Itoa(int(attributionTTL/time.Millisecond)) + `ms linear var(--d) forwards}
 @keyframes ssfl{from{opacity:1}to{opacity:0}}
 ` + growRowsCSS)
 	// The frozen header strip is a flexbox, so it still needs one width rule per
@@ -1434,14 +1540,14 @@ func colWidthOf(widths map[int]int, c int) int {
 // pageShell renders the shell with default column widths and a default-sized
 // sheet, for callers that do not care about shared sheet geometry.
 func pageShell(sheetID string, loRow, hiRow int, grid string, at anchor) string {
-	return pageShellWidths(sheetID, loRow, hiRow, grid, at, nil, DefaultRows, "")
+	return pageShellWidths(sheetID, loRow, hiRow, grid, at, nil, DefaultRows, "", nil)
 }
 
 // styleCSS is the sheet's own stylesheet, from sh.StyleRules(). It rides in the
 // shell for the same reason the column widths do: it is O(config), it changes
 // only when a style is created or collected, and a push then patches ~50 bytes
 // instead of re-rendering a grid to change a colour.
-func pageShellWidths(sheetID string, loRow, hiRow int, grid string, at anchor, widths map[int]int, rows int, styleCSS string) string {
+func pageShellWidths(sheetID string, loRow, hiRow int, grid string, at anchor, widths map[int]int, rows int, styleCSS string, heights map[int]int) string {
 	esc := html.EscapeString(sheetID)
 	var b strings.Builder
 	b.Grow(len(grid) + len(gridCSS) + 3072)
@@ -1529,6 +1635,12 @@ func pageShellWidths(sheetID string, loRow, hiRow int, grid string, at anchor, w
 	// scroll command would be paying for a fact the server already knows.
 	b.WriteString(`,_rows:`)
 	b.WriteString(strconv.Itoa(rows))
+	// The resized rows, as flat [row,height,…] pairs. Local for the reason
+	// `_rows` is: the server owns it. It is the whole sheet rather than the
+	// window because the client needs an offset for rows it cannot see — a
+	// scroll has to know which row it is landing on before that row is fetched.
+	b.WriteString(`,` + heightSignal + `:`)
+	b.WriteString(rowHeightPairs(heights))
 	// The header menu: open, kind ('r'/'c'), index, position, chosen operation,
 	// and `p` — the pending flag the server clears when the reshaped grid
 	// actually arrives.
@@ -1980,6 +2092,33 @@ T.rows=(+getComputedStyle(vp).getPropertyValue('--rows'))||0;
 // longer has. It fires once per clamp and the response never moves scrollTop, so
 // it cannot loop.
 T.setRows=function(n){n=+n;if(!(n>0))return;T.rows=n;};
+// ROW GEOMETRY. Rows are not all the same height, so a row's top is a prefix
+// sum rather than a multiplication. The _rh signal carries the resized rows as
+// flat [row,height,...] pairs, sorted, and the running totals sit beside them so
+// an offset costs a binary search instead of a walk over the sheet.
+//
+// Every clamp, hit test and scroll below goes through topOf/rowAtY. Leaving any
+// one of them multiplying by RH is not a rendering glitch — the CSS still places
+// the row correctly, so the grid looks right and answers a click with the wrong
+// cell.
+T.hrow=[];T.hdel=[];T.hpre=[0];
+T.setHeights=function(a){var rw=[],dl=[],pre=[0],d=0;
+ if(a&&a.length)for(var i=0;i+1<a.length;i+=2){rw.push(+a[i]);
+  var x=(+a[i+1])-RH;dl.push(x);d+=x;pre.push(d);}
+ T.hrow=rw;T.hdel=dl;T.hpre=pre;};
+// hlo: the first resized row at or after r, which is also how many resized rows
+// lie strictly above it — so hpre[hlo(r)] is exactly the shift r has inherited.
+T.hlo=function(r){var a=T.hrow,lo=0,hi=a.length;
+ while(lo<hi){var m=(lo+hi)>>1;if(a[m]<r)lo=m+1;else hi=m;}return lo;};
+T.topOf=function(r){return r*RH+T.hpre[T.hlo(r)];};
+T.hOf=function(r){var i=T.hlo(r);return (i<T.hrow.length&&T.hrow[i]===r)?RH+T.hdel[i]:RH;};
+// rowAtY inverts topOf. Monotonic, so a binary search over the extent; the
+// uniform case skips it entirely, which is every sheet nobody has resized.
+T.rowAtY=function(y){if(y<0)return 0;
+ if(!T.hrow.length)return Math.floor(y/RH);
+ var lo=0,hi=(T.rows||1)-1;
+ while(lo<hi){var m=(lo+hi+1)>>1;if(T.topOf(m)<=y)lo=m;else hi=m-1;}
+ return lo;};
 if('scrollRestoration' in history)history.scrollRestoration='manual';
 // row(): the client's half of ParseRef. Returns the 0-indexed TOP-LEFT row of
 // "D500" or "A1:D20", or -1 for anything it does not recognise.
@@ -2008,7 +2147,7 @@ T.focus=function(){var e=document.getElementById('` + editorID + `');if(!e)retur
 // are actually visible, so the caller can report a real viewport instead of the
 // server's assumed one.
 var pendTop=null,pendAt=0;
-T.seek=function(r){var top=r*RH;pendTop=top;pendAt=performance.now();
+T.seek=function(r){var top=T.topOf(r);pendTop=top;pendAt=performance.now();
  if(vp)vp.scrollTop=top;
  return vp?Math.ceil(vp.clientHeight/RH):40;};
 // arm(): the same guard, for a caller that has already moved the container

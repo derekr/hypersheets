@@ -137,7 +137,7 @@ func TestTheCellOverlayStaysInsideTheGrid(t *testing.T) {
 // so a refusal the server could not explain (a body it could not read, a bad
 // sheet id, a rate limit) still takes the chip down.
 func TestEveryPendingWriterWearsTheBackstopClass(t *testing.T) {
-	page := pageShellWidths("demo", 0, 3, "", zeroAnchor(), nil, DefaultRows, "")
+	page := pageShellWidths("demo", 0, 3, "", zeroAnchor(), nil, DefaultRows, "", nil)
 	raises := strings.Count(page, "$p=true")
 	marks := strings.Count(page, `class="`+pendingWriteCl+`"`)
 	if raises == 0 {

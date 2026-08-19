@@ -33,7 +33,7 @@ func TestEveryWriteOptsOutOfRequestCancellation(t *testing.T) {
 	// TestTheWriteVerbListMatchesTheLimiter below.
 	writes := map[string]bool{
 		"cell": true, "clear": true, "fill": true, "paste": true,
-		"style": true, "colwidth": true, "rows": true, "cols": true,
+		"style": true, "colwidth": true, "rowheight": true, "rows": true, "cols": true,
 	}
 	// Reads, where `auto` is correct and deliberate: a newer one supersedes.
 	reads := map[string]bool{"viewport": true, "sel": true}
@@ -74,7 +74,7 @@ func TestEveryWriteOptsOutOfRequestCancellation(t *testing.T) {
 // against it: a verb the limiter treats as a write but this test does not would
 // be exempt from the rule for no reason anyone chose.
 func TestTheWriteVerbListMatchesTheLimiter(t *testing.T) {
-	for _, verb := range []string{"cell", "clear", "fill", "paste", "style", "colwidth", "rows", "cols"} {
+	for _, verb := range []string{"cell", "clear", "fill", "paste", "style", "colwidth", "rowheight", "rows", "cols"} {
 		if class, _ := classify("POST", "/s/demo/"+verb); class != classWrite {
 			t.Errorf("/%s is listed as a write here but the limiter classifies it as %v", verb, class)
 		}
