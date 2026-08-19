@@ -61,3 +61,45 @@ func TestClearingRcCannotDisturbTheDisplayedWidths(t *testing.T) {
 			"anyone on the sheet would reset a column mid-gesture")
 	}
 }
+
+// A number input whose own default violates its own step is invalid the moment
+// the page loads: the browser flags the box and its spinner snaps to the nearest
+// legal value, so a typed number changes for a reason nothing on screen explains.
+func TestTheAddRowsBoxAcceptsItsOwnDefault(t *testing.T) {
+	html := growRowsHTML("demo")
+
+	attr := func(name string) string {
+		i := strings.Index(html, name+`="`)
+		if i < 0 {
+			t.Fatalf("the add-rows input has no %s attribute", name)
+		}
+		rest := html[i+len(name)+2:]
+		return rest[:strings.IndexByte(rest, '"')]
+	}
+	min, err := strconv.Atoi(attr("min"))
+	if err != nil {
+		t.Fatalf("min: %v", err)
+	}
+	step, err := strconv.Atoi(attr("step"))
+	if err != nil {
+		t.Fatalf("step: %v", err)
+	}
+	max, err := strconv.Atoi(attr("max"))
+	if err != nil {
+		t.Fatalf("max: %v", err)
+	}
+	if growRowsDefault < min || growRowsDefault > max {
+		t.Errorf("the default %d is outside min=%d max=%d", growRowsDefault, min, max)
+	}
+	// HTML validates a number field as min + k*step.
+	if (growRowsDefault-min)%step != 0 {
+		t.Errorf("the default %d is not reachable from min=%d in steps of %d, so the box "+
+			"is invalid on load and the spinner will move the reader's number", growRowsDefault, min, step)
+	}
+	// And the round numbers a person actually types must be legal.
+	for _, n := range []int{1, 10, 50, 100, 500, 1000, 5000} {
+		if n >= min && n <= max && (n-min)%step != 0 {
+			t.Errorf("%d is a value someone would type and the field rejects it", n)
+		}
+	}
+}

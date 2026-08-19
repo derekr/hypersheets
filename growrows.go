@@ -118,8 +118,14 @@ func growRowsHTML(sheetID string) string {
 		// signal holds one, but an emptied box is `''`, and a string in an int
 		// field would be a 400 from ReadSignals rather than the default.
 		`',mn:+$` + growSignal + `},requestCancellation:'disabled'})">Add</button>` +
+		// step="1", not 100. With min="1" a step of 100 makes the valid values
+		// 1, 101, 201 … — which excludes every round number a person would
+		// actually type, including this field's own default of 1000. The browser
+		// marks the box invalid and its spinner snaps to the nearest legal value,
+		// so a typed number changes under the reader for a reason nothing on
+		// screen explains.
 		`<input id="` + growCountID + `" type="number" min="1" max="` +
-		strconv.Itoa(growRowsMax) + `" step="100" data-bind="` + growSignal +
+		strconv.Itoa(growRowsMax) + `" step="1" data-bind="` + growSignal +
 		`" aria-label="how many rows to add">` +
 		`<span>more rows at bottom</span>` +
 		`</div></div>`
