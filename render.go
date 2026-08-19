@@ -242,6 +242,7 @@ func renderWindow(cells []Cell, loRow, hiRow int, sheetID string, sel selRange) 
 	writeRowNums(&b, loRow, nRows)
 	b.WriteString(`</div><div id="` + bufferID + `">`)
 	writeColRules(&b)
+	writeRowStrips(&b, loRow, nRows)
 	b.WriteString(selHTML(sel))
 	writeCells(&b, cells, loRow, nRows)
 	b.WriteString(`</div>`)
@@ -272,6 +273,7 @@ func renderWindowParts(cells []Cell, loRow, hiRow int, sheetID string) (head, ta
 	writeRowNums(&h, loRow, nRows)
 	h.WriteString(`</div><div id="` + bufferID + `">`)
 	writeColRules(&h)
+	writeRowStrips(&h, loRow, nRows)
 
 	var t strings.Builder
 	t.Grow(len(cells)/2*30 + editorBytes + len(sheetID) + 512)
@@ -412,8 +414,42 @@ func writeCells(b *strings.Builder, cells []Cell, loRow, nRows int) {
 //	layout  500 nested grid containers instead of one, the cost that does not
 //	        show up in a byte count.
 //
-// SS_ROW_GROUPS=1 selects it, so both shapes can be measured on the same build.
+// MEASURED, AND IT LOSES. On a 10,000-row seeded sheet with 9,918 cells in the
+// buffer, wrapping rows costs 49.4ms per morph against 6.3ms flat — 7.8x, with
+// tight non-overlapping samples — because it is 450 nested grid containers
+// rather than one. The byte win is real (-29% raw) and nowhere near worth that.
+//
+// The row strip (writeRowStrips) is what replaced it: an element per row that
+// PAINTS but does not contain, which costs nothing measurable. Kept only so the
+// comparison can be re-run.
+//
+// SS_ROW_GROUPS=1 selects it.
 var rowGroupMode = os.Getenv("SS_ROW_GROUPS") == "1"
+
+// ─── Row strips ───────────────────────────────────────────────────────────────
+//
+// One element per buffered row, carrying the horizontal rule and, later, the
+// row's height and background. It is deliberately NOT the cells' parent: making
+// the row a container means one nested grid per row, which measured 7.8x slower
+// to morph on a dense sheet (6.3ms against 49.4ms, 450 wrappers, tight samples).
+// A strip that only paints costs 0.3ms and about 400 compressed bytes.
+//
+// It is emitted for EVERY buffered row, not only rows holding data, because a
+// rule and a background are properties of the row rather than of its contents —
+// and painting a row background was impossible before this: sparse rendering
+// emits nothing where a row is empty, so an axis-level fill had nothing to land
+// on and tinted only the cells that happened to hold a value.
+//
+// Strips come before the cells in document order, so cells paint over them.
+const stripClass = "rs"
+
+func writeRowStrips(b *strings.Builder, loRow, nRows int) {
+	for i := 0; i < nRows; i++ {
+		b.WriteString(`<i class="` + stripClass + `" style="--r:`)
+		b.WriteString(strconv.Itoa(loRow + i))
+		b.WriteString(`"></i>`)
+	}
+}
 
 // groupClass is on the wrapper rather than being matched by an id prefix. `#sl`
 // is also a `<div>` child of `#b`, and `[id^=r]` would be an attribute match
@@ -985,10 +1021,11 @@ header .tb .fs{height:24px;max-width:7.5rem;border:1px solid #dadce0;border-radi
 #cols span:hover b{opacity:.7}
 #cols b:hover{opacity:1}
 #` + gridID + `{position:relative;width:var(--tw);height:calc(var(--rows) * var(--rh))}
-#` + gutterID + `{position:sticky;left:0;z-index:1;display:block;width:var(--hw);height:100%;background-color:var(--hd);background-image:` + rowRules(`var(--ln)`) + `;box-shadow:inset -1px 0 0 var(--ln2);user-select:none}
-#` + gutterID + `>b{position:absolute;left:0;top:calc(var(--r) * var(--rh));width:var(--hw);height:calc(var(--rh) - 1px);line-height:calc(var(--rh) - 1px);color:#444746;font-weight:400;font-size:11px;text-align:center}
+#` + gutterID + `{position:sticky;left:0;z-index:1;display:block;width:var(--hw);height:100%;background-color:var(--hd);box-shadow:inset -1px 0 0 var(--ln2);user-select:none}
+#` + gutterID + `>b{position:absolute;left:0;top:calc(var(--r) * var(--rh));width:var(--hw);height:var(--rh);line-height:calc(var(--rh) - 1px);color:#444746;font-weight:400;font-size:11px;text-align:center;border-bottom:1px solid var(--ln)}
 #` + gutterID + `>b.a{background:#d3e3fd;color:#0b57d0}
-#` + bufferID + `{position:absolute;top:0;left:0;width:var(--tw);height:100%;display:grid;grid-template-columns:` + gridTracks() + `;grid-template-rows:100%;background-image:` + rowRules(`var(--ln)`) + `;user-select:none}
+#` + bufferID + `{position:absolute;top:0;left:0;width:var(--tw);height:100%;display:grid;grid-template-columns:` + gridTracks() + `;grid-template-rows:100%;user-select:none}
+#` + bufferID + `>i.` + stripClass + `{position:absolute;left:0;right:0;top:calc(var(--r) * var(--rh));height:var(--rh);border-bottom:1px solid var(--ln);pointer-events:none}
 #` + bufferID + `>i{grid-row:1;box-shadow:inset -1px 0 0 var(--ln);pointer-events:none}
 #` + bufferID + ` b{position:absolute;left:0;right:1px;top:calc(var(--r) * var(--rh));height:calc(var(--rh) - 1px);padding:0 4px;overflow:hidden;white-space:nowrap;font-weight:400;line-height:calc(var(--rh) - 1px);text-align:right;font-variant-numeric:tabular-nums}
 #` + bufferID + ` b.t{text-align:left}
@@ -1045,30 +1082,6 @@ header .pl i.me{box-shadow:0 0 0 2px #fff,0 0 0 3px hsl(var(--h) 68% 45%)}
 	}
 	b.WriteString(colPlacementCSS())
 	return b.String()
-}
-
-// rowRules is the horizontal grid lines, as one declaration for the whole sheet.
-// A tile at the row pitch costs zero elements and cannot drift: the period is
-// exactly `--rh`, so there is no accumulated rounding to go wrong at the bottom.
-//
-// The line is the last pixel of each period and cells are `--rh - 1` tall, so a
-// cell sits above its own rule rather than covering it. That is also why cells
-// have no background.
-func rowRules(color string) string {
-	rh := strconv.Itoa(rowHeightPx) + "px"
-	line := strconv.Itoa(rowHeightPx-1) + "px"
-	// One tile repeated by the background machinery, not one
-	// `repeating-linear-gradient` stretched over the whole sheet. Both paint the
-	// same pixels and ask the renderer for very different things: `#g` is 220,000px
-	// tall on a 10,000-row sheet, and a repeating gradient over an extent that large
-	// is a single paint across the whole of it that WebKit's tiled backing gives up
-	// on — Safari draws the column lines and no row lines at all.
-	//
-	// It also avoids the double-position colour stop (`transparent 0 21px`), the
-	// other candidate for Safari's disagreement, so this is correct under either
-	// diagnosis.
-	return `linear-gradient(to bottom,transparent ` + line + `,` + color + ` ` + line +
-		`);background-size:100% ` + rh + `;background-repeat:repeat-y`
 }
 
 // gridTracks is `grid-template-columns` for `#b`: the row-number gutter, then
