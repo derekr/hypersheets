@@ -177,6 +177,13 @@ func editorHTML(sheetID string) string {
 		` data-on:` + commitEvent + `__window="` + cellPost(sheetID) + `">`
 }
 
+// It writes pixels rather than `--r`, and that is not a style preference. Rows are
+// not all the same height, so `--r` alone would send every overlay through the
+// uniform fallback and place the editor and the active-cell outline in the gap
+// between two rows on any sheet somebody has resized. Only the elements the
+// SERVER renders can be positioned by row index, because only those get a
+// per-row rule; anything the client places has to do the arithmetic.
+//
 // cellBoxStyle places a box flush over the active cell, shared by the editor and
 // the active-cell outline so the two can never disagree.
 //
@@ -185,7 +192,9 @@ func editorHTML(sheetID string) string {
 // moves, and a column width moves. `--r` plus a `grid-column` is the cell's
 // address instead, resolved against the overlay grid's tracks (cellOverlayID), so
 // a resize moves the outline in the same layout that moves the cell under it.
-var cellBoxStyle = "{'--r':$row,gridColumn:($col+2)+'/'+($col+3)}"
+var cellBoxStyle = "{'--t':window.__ss.topOf($row,$" + heightSignal + ")+'px'," +
+	"'--hr':window.__ss.hOf($row,$" + heightSignal + ")+'px'," +
+	"gridColumn:($col+2)+'/'+($col+3)}"
 
 // activeCellHTML is the outline on the selected cell: a sibling of the editor,
 // in the same coordinate space, and what makes a cell look selected while it is
@@ -1859,7 +1868,7 @@ func pageShellWidths(sheetID string, loRow, hiRow int, grid string, at anchor, w
 	// `top:var(--ch)`.
 	b.WriteString(`<div id="` + boxOverlayID + `">`)
 	b.WriteString(`<div id="` + selBoxID + `" data-show="$_sar!==$_sfr||$_sac!==$_sfc"`)
-	b.WriteString(` data-style="window.__ss?window.__ss.selBox($_sar,$_sac,$_sfr,$_sfc):{}"></div>`)
+	b.WriteString(` data-style="window.__ss?window.__ss.selBox($_sar,$_sac,$_sfr,$_sfc,$` + heightSignal + `):{}"></div>`)
 	// The copy marquee, on exactly the same terms as `#sb`: shell markup, one box
 	// over a coordinate space, zero bytes per render and per cell, and correct
 	// over the empty cells that under sparse rendering are most of them. It is
@@ -2158,17 +2167,27 @@ T.setRows=function(n){n=+n;if(!(n>0))return;T.rows=n;};
 // one of them multiplying by RH is not a rendering glitch — the CSS still places
 // the row correctly, so the grid looks right and answers a click with the wrong
 // cell.
-T.hrow=[];T.hdel=[];T.hpre=[0];
-T.setHeights=function(a){var rw=[],dl=[],pre=[0],d=0;
+T.hrow=[];T.hdel=[];T.hpre=[0];T.hsrc='';
+T.setHeights=function(a){var s=(a&&a.length)?String(a):'';if(s===T.hsrc)return;
+ var rw=[],dl=[],pre=[0],d=0;
  if(a&&a.length)for(var i=0;i+1<a.length;i+=2){rw.push(+a[i]);
   var x=(+a[i+1])-RH;dl.push(x);d+=x;pre.push(d);}
- T.hrow=rw;T.hdel=dl;T.hpre=pre;};
+ T.hrow=rw;T.hdel=dl;T.hpre=pre;T.hsrc=s;};
 // hlo: the first resized row at or after r, which is also how many resized rows
 // lie strictly above it — so hpre[hlo(r)] is exactly the shift r has inherited.
 T.hlo=function(r){var a=T.hrow,lo=0,hi=a.length;
  while(lo<hi){var m=(lo+hi)>>1;if(a[m]<r)lo=m+1;else hi=m;}return lo;};
-T.topOf=function(r){return r*RH+T.hpre[T.hlo(r)];};
-T.hOf=function(r){var i=T.hlo(r);return (i<T.hrow.length&&T.hrow[i]===r)?RH+T.hdel[i]:RH;};
+// The second argument is the height signal itself, and it is both the
+// subscription and the data. A Datastar expression that positions an overlay has
+// to name the signal to re-run when a row is resized, because the tables above
+// are plain state; naming it without reading it is not enough, because two
+// effects on one signal have no defined order and the overlay's would otherwise
+// be free to compute its top from tables the other effect had not filled in yet.
+// Rebuilding from the argument makes the answer independent of that order.
+// TestNoOverlayComputesItsOwnPixels states the rule for both axes.
+T.topOf=function(r,dep){if(dep!==undefined)T.setHeights(dep);return r*RH+T.hpre[T.hlo(r)];};
+T.hOf=function(r,dep){if(dep!==undefined)T.setHeights(dep);
+ var i=T.hlo(r);return (i<T.hrow.length&&T.hrow[i]===r)?RH+T.hdel[i]:RH;};
 // rowAtY inverts topOf. Monotonic, so a binary search over the extent; the
 // uniform case skips it entirely, which is every sheet nobody has resized.
 T.rowAtY=function(y){if(y<0)return 0;

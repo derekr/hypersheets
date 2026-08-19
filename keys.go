@@ -853,9 +853,13 @@ T.selUp=function(){var d=T.dg;T.dg=null;T.lr=-1;T.lc=-1;if(d)T.selq(T.sc,T.sr,T.
 T.selTook=function(){var v=T.tk;T.tk=false;return v;};
 T.selRng=function(ar,ac,fr,fc){if(ar===fr&&ac===fc)return '';
  return T.a1(Math.min(ar,fr),Math.min(ac,fc))+':'+T.a1(Math.max(ar,fr),Math.max(ac,fc));};
-T.selBox=function(ar,ac,fr,fc){
+// The last argument is the height signal: both the subscription that makes this
+// expression re-run when a row is resized and the data it resizes against. See
+// T.topOf.
+T.selBox=function(ar,ac,fr,fc,dep){if(dep!==undefined)T.setHeights(dep);
  var r0=Math.min(ar,fr),r1=Math.max(ar,fr),c0=Math.min(ac,fc),c1=Math.max(ac,fc);
- return {'--r':r0,'--n':r1-r0+1,gridColumn:(c0+2)+'/'+(c1+3)};};
+ return {'--t':T.topOf(r0)+'px','--sh':(T.topOf(r1+1)-T.topOf(r0))+'px',
+    gridColumn:(c0+2)+'/'+(c1+3)};};
 T.selSize=function(ar,ac,fr,fc){
  var n=Math.abs(fr-ar)+1,m=Math.abs(fc-ac)+1;
  return (n>1||m>1)?(n+'R × '+m+'C'):'';};
@@ -937,7 +941,11 @@ func echoScript() string {
 		col = `e.style.setProperty('--c',''+(ref.charCodeAt(0)-63));`
 	}
 	mk := `T.mkc=function(ref){var b=document.getElementById('` + bufferID + `');if(!b)return null;
- var e=document.createElement('b');e.id=ref;e.style.setProperty('--r',''+(+ref.slice(1)-1));` + col + `
+ var e=document.createElement('b');e.id=ref;var rw=+ref.slice(1)-1;
+ // The echo places itself. A rule cannot: setProperty writes a space
+ // after the colon, which the server's per-row selectors do not match.
+ e.style.setProperty('--r',''+rw);
+ e.style.setProperty('--t',T.topOf(rw)+'px');e.style.setProperty('--hr',T.hOf(rw)+'px');` + col + `
  b.appendChild(e);return e;};
 T.rmc=function(e){e.remove();};`
 	if rowGroupMode {

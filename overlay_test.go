@@ -74,15 +74,51 @@ func TestNoOverlayComputesItsOwnPixels(t *testing.T) {
 			t.Errorf("data-signals still declares %q", bad)
 		}
 	}
-	// What the two cell overlays carry instead is an ADDRESS.
-	if !strings.Contains(cellBoxStyle, "'--r':$row") || !strings.Contains(cellBoxStyle, "gridColumn:") {
-		t.Errorf("the cell overlays are not placed by row and grid-column: %q", cellBoxStyle)
+	// HORIZONTALLY the overlays still carry an address, and that is the rule the
+	// bug above was about: grid-column names a track and the browser resolves it
+	// against grid-template-columns, so a column resize moves the overlay with no
+	// copy of the cascade anywhere.
+	if !strings.Contains(cellBoxStyle, "gridColumn:") {
+		t.Errorf("the cell overlays are not placed by grid-column: %q", cellBoxStyle)
 	}
-	if strings.Contains(cellBoxStyle, "px") {
-		t.Errorf("the cell overlays still compute pixels: %q", cellBoxStyle)
+	for _, bad := range []string{"offsetLeft", "offsetWidth", "$x", "$w "} {
+		if strings.Contains(cellBoxStyle, bad) {
+			t.Errorf("the cell overlays compute their own horizontal pixels (%q): %q", bad, cellBoxStyle)
+		}
 	}
-	// And so does the selection box: T.selBox hands back --r/--n/grid-column and
-	// reads no DOM at all.
+
+	// VERTICALLY they cannot, and this is the one asymmetry in the model. Rows
+	// are absolutely positioned rather than grid tracks, so there is no
+	// grid-row to name and no way to say "row 7" to CSS from a data-style — an
+	// expression writes `--r: 7` with a space, which the per-row rules the
+	// server emits do not match. So the client computes the top, through the one
+	// shared offset function, and NAMES THE HEIGHT SIGNAL so the expression
+	// re-runs when a row is resized. Without that dependency it would compute a
+	// top once and keep it after the row moved, which is the same staleness one
+	// axis over.
+	for _, want := range []string{"topOf($row", "hOf($row", "$" + heightSignal} {
+		if !strings.Contains(cellBoxStyle, want) {
+			t.Errorf("the cell overlays do not derive their top from %q: %q", want, cellBoxStyle)
+		}
+	}
+
+	// Naming the signal is only half of it. The tables topOf reads are plain
+	// state kept in step by a second effect on the same signal, and two effects
+	// on one signal have no defined order — so an overlay that only named the
+	// height would be free to run first and compute its top from tables that
+	// still describe a uniform sheet. Both accessors rebuild from the argument.
+	anchor := anchorScript()
+	for _, want := range []string{
+		"T.topOf=function(r,dep){if(dep!==undefined)T.setHeights(dep);",
+		"T.hOf=function(r,dep){if(dep!==undefined)T.setHeights(dep);",
+	} {
+		if !strings.Contains(anchor, want) {
+			t.Errorf("the shared offset function does not rebuild from its height argument: want %q", want)
+		}
+	}
+
+	// The selection box follows the same split: grid-column across, the shared
+	// offset function down, and the height signal named so it stays current.
 	js := selectScript()
 	i := strings.Index(js, "T.selBox=function")
 	if i < 0 {
@@ -92,13 +128,25 @@ func TestNoOverlayComputesItsOwnPixels(t *testing.T) {
 	if j := strings.Index(body, "\nT."); j >= 0 {
 		body = body[:j]
 	}
-	for _, bad := range []string{"offsetLeft", "offsetWidth", "px"} {
+	for _, bad := range []string{"offsetLeft", "offsetWidth"} {
 		if strings.Contains(body, bad) {
-			t.Errorf("T.selBox still reads or emits pixels (%q): %s", bad, body)
+			t.Errorf("T.selBox reads the DOM for its horizontal extent (%q): %s", bad, body)
 		}
 	}
-	if !strings.Contains(body, "gridColumn") || !strings.Contains(body, "'--n'") {
-		t.Errorf("T.selBox does not return a grid address: %s", body)
+	if !strings.Contains(body, "gridColumn") {
+		t.Errorf("T.selBox does not return a grid address across: %s", body)
+	}
+	if !strings.Contains(body, "T.topOf(") {
+		t.Errorf("T.selBox does not use the shared offset function: %s", body)
+	}
+	// The height argument is the subscription AND the data. Naming it is what
+	// makes the expression re-run on a resize; applying it is what keeps the
+	// answer right when this effect runs before the one that fills the tables.
+	if !strings.Contains(js, "T.selBox=function(ar,ac,fr,fc,dep)") {
+		t.Error("T.selBox takes no height argument, so a resize will not move the selection")
+	}
+	if !strings.Contains(body, "T.setHeights(dep)") {
+		t.Errorf("T.selBox names the height signal without applying it, so it can read half-built tables: %s", body)
 	}
 }
 
@@ -115,7 +163,11 @@ func TestTheCellOverlayStaysInsideTheGrid(t *testing.T) {
 			t.Errorf("#%s is no longer part of the window render", id)
 		}
 	}
-	if i, j := strings.Index(win, cellOverlayID), strings.Index(win, editorID); i < 0 || j < i {
+	// Matched as attributes, not as bare ids. `oc` and `ed` are two characters
+	// long and turn up inside ordinary words — `disabled` contains one of them —
+	// so a substring search finds whichever expression happens to be emitted
+	// first and reports a nesting failure that is not there.
+	if i, j := strings.Index(win, `id="`+cellOverlayID+`"`), strings.Index(win, `id="`+editorID+`"`); i < 0 || j < i {
 		t.Error("the editor is not inside the overlay grid, so it has no grid area to be placed in")
 	}
 	// The selection box and the copy marquee stay OUT of it: nothing a push
