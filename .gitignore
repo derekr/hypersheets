@@ -1,0 +1,16 @@
+# Build output. `go build` drops the binary here, and it embeds absolute local
+# paths from the build machine plus every flag's help text.
+/sheetstream
+/sheetstream-*
+
+# Runtime artifacts.
+/data/
+*.db
+*.db-wal
+*.db-shm
+*.gone
+*.log
+trace.jsonl
+
+# Editor / OS
+.DS_Store
