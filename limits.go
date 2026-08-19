@@ -1147,7 +1147,7 @@ func retentionNote(ttl time.Duration) string {
 func indexCreateOnlyHTML(ttl time.Duration) string {
 	return `<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">` +
 		`<meta name="viewport" content="width=device-width,initial-scale=1">` +
-		`<title>sheetstream</title><style>` + indexCSS + `</style></head><body><main>` +
+		`<title>sheetstream</title><link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' fill='%23fff'/%3E%3Cpath d='M0 5h16M0 10h16M5 0v16M10 0v16' stroke='%23cdd5e2'/%3E%3Crect x='5' y='5' width='5' height='5' fill='%233b5e8b'/%3E%3C/svg%3E"><style>` + indexCSS + `</style></head><body><main>` +
 		`<h1>sheetstream</h1><p class="sub">A sheet's URL is its key — keep the link, ` +
 		`it is the only way back to it.</p>` +
 		retentionNote(ttl) +
