@@ -763,6 +763,7 @@ func cascadeCSS(rules []StyleRule, cols, rows map[int]int) string {
 			b.WriteByte('{')
 			b.WriteString(ruleBody(by[id], true))
 			b.WriteByte('}')
+			rowBackdropCSS(&b, r, by[id])
 		}
 	}
 
@@ -821,6 +822,27 @@ func colBackdropCSS(b *strings.Builder, c int, st Style) {
 	b.WriteString(`#` + bufferID + `>i:nth-of-type(`)
 	b.WriteString(strconv.Itoa(c + 2))
 	b.WriteString(`){background:`)
+	b.WriteString(st.BG)
+	b.WriteByte('}')
+}
+
+// rowBackdropCSS paints a styled row's fill across the whole row, including the
+// columns that hold nothing. It is colBackdropCSS one axis over, and it needed
+// the row strip to exist: before that a row style could only be expressed as a
+// selector over cells, so "make this row yellow" coloured the two cells that
+// happened to hold a value and left the rest white.
+//
+// The strip is a later child of `#b` than the column backdrops, so a row fill
+// paints over a column fill — which is the precedence the cascade already
+// resolves for cells (cell beats row beats column).
+func rowBackdropCSS(b *strings.Builder, row int, st Style) {
+	if st.BG == "" {
+		return
+	}
+	d := rowVarDecl(strconv.Itoa(row))
+	sel := `#` + bufferID + `>i.` + stripClass
+	b.WriteString(sel + `[style="` + d + `"],` + sel + `[style^="` + d + `;"]`)
+	b.WriteString(`{background:`)
 	b.WriteString(st.BG)
 	b.WriteByte('}')
 }

@@ -74,3 +74,61 @@ func TestRowGroupsAreOffByDefault(t *testing.T) {
 		t.Error("row groups are on; they cost 49.4ms per morph against 6.3ms flat")
 	}
 }
+
+// ─── axis fills ───────────────────────────────────────────────────────────────
+
+// A row fill has to cover the whole row, including the columns holding nothing.
+// Before the strip existed a row style could only be expressed as a selector over
+// cells, so "make this row yellow" coloured the cells that happened to hold a
+// value and left the rest white — the feature failing, not merely looking odd.
+func TestARowFillCoversTheWholeRow(t *testing.T) {
+	rules := []StyleRule{{ID: 1, Style: Style{BG: "#ffd966"}}}
+	css := cascadeCSS(rules, nil, map[int]int{2: 1})
+
+	if !strings.Contains(css, `>i.`+stripClass+`[style="--r:2"]`) {
+		t.Errorf("no strip backdrop for row 2; the fill would only reach cells that exist:\n  %s", css)
+	}
+	if !strings.Contains(css, "background:#ffd966") {
+		t.Errorf("the row's fill is missing:\n  %s", css)
+	}
+}
+
+// The column twin already existed; this pins that both axes are covered and that
+// they are covered the same way.
+func TestBothAxesFillEmptySpace(t *testing.T) {
+	rules := []StyleRule{{ID: 1, Style: Style{BG: "#b6d7a8"}}}
+	col := cascadeCSS(rules, map[int]int{4: 1}, nil)
+	row := cascadeCSS(rules, nil, map[int]int{4: 1})
+	if !strings.Contains(col, `>i:nth-of-type(6){background:#b6d7a8}`) {
+		t.Errorf("column 4 has no backdrop:\n  %s", col)
+	}
+	if !strings.Contains(row, `>i.`+stripClass+`[style="--r:4"]`) {
+		t.Errorf("row 4 has no backdrop:\n  %s", row)
+	}
+}
+
+// A fill with no colour must emit no backdrop, or every bold-only row style
+// would paint a transparent box and grow the stylesheet for nothing.
+func TestAColourlessRowStyleEmitsNoBackdrop(t *testing.T) {
+	bold := true
+	_ = bold
+	rules := []StyleRule{{ID: 1, Style: Style{Bold: true}}}
+	css := cascadeCSS(rules, nil, map[int]int{7: 1})
+	if strings.Contains(css, `i.`+stripClass+`[style="--r:7"]`) {
+		t.Errorf("a bold-only row style emitted a backdrop:\n  %s", css)
+	}
+}
+
+// Two renders of an unchanged window must produce identical bytes, or the
+// screen's stylesheet compare patches on every push forever.
+func TestTheStylesheetIsStableAcrossRenders(t *testing.T) {
+	rules := []StyleRule{{ID: 1, Style: Style{BG: "#ffd966"}}, {ID: 2, Style: Style{BG: "#b6d7a8"}}}
+	rows := map[int]int{9: 1, 2: 1, 5: 2}
+	cols := map[int]int{3: 2, 1: 1}
+	first := cascadeCSS(rules, cols, rows)
+	for i := 0; i < 8; i++ {
+		if got := cascadeCSS(rules, cols, rows); got != first {
+			t.Fatalf("render %d differs; the stylesheet would be patched on every push", i)
+		}
+	}
+}
