@@ -142,7 +142,7 @@ func cellRendered(c Cell) bool { return c.Kind != KindEmpty || c.Style != 0 }
 
 // extentEffectExpr keeps T.rows in step with the server's extent. One
 // subscription to one signal; no request, no DOM, no per-render cost.
-const extentEffectExpr = `if(window.__ss){window.__ss.setRows($_rows);window.__ss.setHeights($_rh)}`
+const extentEffectExpr = `if(window.__ss){window.__ss.setRows($_rows);window.__ss.setHeights($_rhs)}`
 
 // ─── The morph hole ────────────────────────────────────────────────────────────
 //
@@ -238,7 +238,10 @@ func renderWindow(cells []Cell, loRow, hiRow int, sheetID string, sel selRange) 
 	// re-rendering the grid to change one integer. It lives on `#vp` instead, as
 	// an inherited custom property patched by one signal, exactly like the 26
 	// column widths. See pageShellWidths and patchExtent.
-	b.WriteString(`<div id="` + gridID + `"><div id="` + gutterID + `">`)
+	b.WriteString(`<div id="` + gridID + `"><div id="` + gutterID + `" data-on:pointerdown="` +
+		rzRowDownExpr + `" data-on:pointermove="` + rzRowMoveExpr +
+		`" data-on:pointerup="` + rzRowUpExpr(sheetID) +
+		`" data-on:pointercancel="` + rzRowCancelExpr + `">`)
 	writeRowNums(&b, loRow, nRows)
 	b.WriteString(`</div><div id="` + bufferID + `">`)
 	writeColRules(&b)
@@ -269,7 +272,10 @@ func renderWindowParts(cells []Cell, loRow, hiRow int, sheetID string) (head, ta
 
 	var h strings.Builder
 	h.Grow(nRows*36 + 512)
-	h.WriteString(`<div id="` + gridID + `"><div id="` + gutterID + `">`)
+	h.WriteString(`<div id="` + gridID + `"><div id="` + gutterID + `" data-on:pointerdown="` +
+		rzRowDownExpr + `" data-on:pointermove="` + rzRowMoveExpr +
+		`" data-on:pointerup="` + rzRowUpExpr(sheetID) +
+		`" data-on:pointercancel="` + rzRowCancelExpr + `">`)
 	writeRowNums(&h, loRow, nRows)
 	h.WriteString(`</div><div id="` + bufferID + `">`)
 	writeColRules(&h)
@@ -751,10 +757,16 @@ func rowGeometryCSS(loRow, hiRow, baseTop, totalH, rows int, heights map[int]int
 		}
 		if top != r*rowHeightPx || h != rowHeightPx {
 			d := rowVarDecl(strconv.Itoa(r))
+			// Every element the SERVER positions by row index. Anything the
+			// client places does the arithmetic itself (see cellBoxStyle):
+			// a rule cannot reach it, because setProperty spells the same
+			// declaration with a space and would not match these selectors.
 			sel := `#` + gutterID + `>b[style="` + d + `"],` +
 				`#` + bufferID + `>i.` + stripClass + `[style="` + d + `"],` +
 				`#` + bufferID + ` b[style="` + d + `"],` +
-				`#` + bufferID + ` b[style^="` + d + `;"]`
+				`#` + bufferID + ` b[style^="` + d + `;"],` +
+				`#pc>div[style="` + d + `"],` +
+				`#pc>div[style^="` + d + `;"]`
 			b.WriteString(sel)
 			b.WriteString(`{--t:`)
 			b.WriteString(strconv.Itoa(top))
@@ -768,7 +780,21 @@ func rowGeometryCSS(loRow, hiRow, baseTop, totalH, rows int, heights map[int]int
 }
 
 // heightSignal carries the resized rows to the client.
-const heightSignal = "_rh"
+// sortedKeys is the row order both the seed and the push encode in. A Go map is
+// not ordered and the client binary-searches the result.
+func sortedKeys(m map[int]int) []int {
+	out := make([]int, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Ints(out)
+	return out
+}
+
+// heightSignal is `_rhs`, not `_rh`: the row drag commits through `rh`, and two
+// signals a character apart in the same expressions is a reading hazard for no
+// gain.
+const heightSignal = "_rhs"
 
 // rowHeightPairs encodes a sparse height map as a flat, row-sorted array.
 //
@@ -779,11 +805,7 @@ func rowHeightPairs(heights map[int]int) string {
 	if len(heights) == 0 {
 		return "[]"
 	}
-	rows := make([]int, 0, len(heights))
-	for r := range heights {
-		rows = append(rows, r)
-	}
-	sort.Ints(rows)
+	rows := sortedKeys(heights)
 	var b strings.Builder
 	b.Grow(len(rows) * 12)
 	b.WriteByte('[')
@@ -1152,6 +1174,7 @@ header .tb .fs{height:24px;max-width:7.5rem;border:1px solid #dadce0;border-radi
 #` + gutterID + `{position:sticky;left:0;z-index:1;display:block;width:var(--hw);height:100%;background-color:var(--hd);box-shadow:inset -1px 0 0 var(--ln2);user-select:none}
 #` + gutterID + `>b{position:absolute;left:0;top:var(--t,calc(var(--r) * var(--rh)));width:var(--hw);height:var(--hr,var(--rh));line-height:calc(var(--rh) - 1px);color:#444746;font-weight:400;font-size:11px;text-align:center;border-bottom:1px solid var(--ln)}
 #` + gutterID + `>b.a{background:#d3e3fd;color:#0b57d0}
+#` + gutterID + `>b::after{content:"";position:absolute;left:0;right:0;bottom:0;height:` + strconv.Itoa(rowGripPx) + `px;cursor:row-resize}
 #` + bufferID + `{position:absolute;top:0;left:0;width:var(--tw);height:100%;display:grid;grid-template-columns:` + gridTracks() + `;grid-template-rows:100%;user-select:none}
 #` + bufferID + `>i.` + stripClass + `{position:absolute;left:0;right:0;top:var(--t,calc(var(--r) * var(--rh)));height:var(--hr,var(--rh));border-bottom:1px solid var(--ln);pointer-events:none}
 #` + bufferID + `>i{grid-row:1;box-shadow:inset -1px 0 0 var(--ln);pointer-events:none}
@@ -1339,6 +1362,40 @@ const rzDownExpr = `const t=evt.target;if(t.tagName!=='I')return;evt.preventDefa
 	`const s=t.parentElement;` +
 	`if(window.__ss)window.__ss.rzStart(+s.dataset.c,evt.clientX,s.offsetWidth);` +
 	`el.setPointerCapture(evt.pointerId)`
+
+// The row drag. It hangs off the gutter rather than a grip element per row: the
+// gutter already emits one number per buffered row, and adding a handle to each
+// would double that for a target the reader can only be on one of at a time. The
+// hit is decided by where in the row the pointer went down — the bottom few
+// pixels — and `#rn>b::after` gives that band its cursor without being an
+// element of its own.
+var rzRowDownExpr = `const t=evt.target;if(t.tagName!=='B'||!t.parentElement||t.parentElement.id!=='` + gutterID + `')return;` +
+	`const q=t.getBoundingClientRect();if(evt.clientY<q.bottom-` + strconv.Itoa(rowGripPx) + `)return;` +
+	`evt.preventDefault();const rw=+t.style.getPropertyValue('--r');` +
+	`if(window.__ss)window.__ss.rzStartR(rw,evt.clientY,q.height);` +
+	`el.setPointerCapture(evt.pointerId)`
+
+const rzRowMoveExpr = `if(window.__ss)window.__ss.rzMoveR(evt.clientY)`
+
+// rzRowUpExpr commits. It posts from the gutter, which is page-shell markup no
+// push replaces, and opts out of cancellation for the reason every other write
+// does: two resizes are two operations.
+//
+// Unlike the column drag it writes no optimistic value. A row's geometry lives
+// in the stylesheet the server derives per window, so showing the new height
+// before the server answers would mean the client generating that stylesheet
+// too — two sources for one set of rules. The guide line is the feedback during
+// the gesture; the row moves when the push lands.
+func rzRowUpExpr(sheetID string) string {
+	return `if(!window.__ss)return;const v=window.__ss.rzEndR(evt.clientY);if(!v)return;` +
+		`$rr=v.r;$rh=v.h;` +
+		`@post('/s/` + sheetID + `/rowheight',{requestCancellation:'disabled'})`
+}
+
+const rzRowCancelExpr = `if(window.__ss)window.__ss.rzCancelR()`
+
+// rowGripPx is how tall the resize band at the bottom of a row number is.
+const rowGripPx = 5
 
 // rzMoveExpr writes no signal. It moves one element's transform, which is what
 // keeps the drag cheap on a dense buffer.
@@ -1627,7 +1684,7 @@ func pageShellWidths(sheetID string, loRow, hiRow int, grid string, at anchor, w
 	// and `rw` its live width; they are ordinary signals because the commit POST
 	// has to carry them to the server. The 26 `_w` signals it also writes are
 	// local (see colWidthSignals).
-	b.WriteString(`,rc:-1,rw:0`)
+	b.WriteString(`,rc:-1,rw:0,rr:-1,rh:0`)
 	// The sheet's allocated row extent — how tall the scroll container is, not
 	// how many rows hold data (see (*Sheet).UsedRows for the other one). It is
 	// underscore-prefixed for the same reason the widths are: it is shared sheet
@@ -2073,7 +2130,7 @@ func popExpr(sheetID string) string {
 func anchorScript() string {
 	rh := strconv.Itoa(rowHeightPx)
 	return `<script>(function(){var T=window.__ss;if(!T)return;
-var vp=document.getElementById('vp'),RH=` + rh + `;
+var vp=document.getElementById('vp'),RH=` + rh + `,MINH=` + strconv.Itoa(MinRowHeight) + `,MAXH=` + strconv.Itoa(MaxRowHeight) + `;
 // T.rows is the sheet's allocated row extent, and it is a variable: a sheet
 // grows when someone writes past its bottom and shrinks when rows are deleted.
 // Seeded from --rows and re-seeded by T.setRows whenever the _rows signal
@@ -2201,6 +2258,16 @@ T.rzMove=function(x){if(rzC<0)return;T.gdMove(rzX+(T.rzAt(x)-rzW));};
 T.rzEnd=function(x){if(rzC<0)return null;var c=rzC,w=T.rzAt(x);
  rzC=-1;T.gdHide();return {c:c,w:w};};
 T.rzCancel=function(){rzC=-1;T.gdHide();};
+// The same gesture one axis over. The move writes nothing either: a row resize
+// reflows every row below it, so doing that per frame on a dense buffer is the
+// one thing the guide exists to avoid.
+var rzYy=0,rzHh=0,rzR=-1;
+T.rzStartR=function(r,y,h){rzR=r;rzYy=y;rzHh=h;T.gdShow('y',y);};
+T.rzAtR=function(y){var v=rzHh+(y-rzYy);return v<MINH?MINH:(v>MAXH?MAXH:v);};
+T.rzMoveR=function(y){if(rzR<0)return;T.gdMove(rzYy+(T.rzAtR(y)-rzHh));};
+T.rzEndR=function(y){if(rzR<0)return null;var r=rzR,h=T.rzAtR(y);
+ rzR=-1;T.gdHide();return {r:r,h:h};};
+T.rzCancelR=function(){rzR=-1;T.gdHide();};
 T.rzLive=function(){return rzC;};
 T.anchorRow=+((vp&&vp.dataset.ar)||0);
 if(T.anchorRow>0)T.seek(T.anchorRow);

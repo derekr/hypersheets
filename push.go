@@ -340,11 +340,23 @@ func (s *Server) patchWidths(sse *datastar.ServerSentEventGenerator, sheetID str
 	if err != nil {
 		return err
 	}
-	sig := make(map[string]int, MaxCols+1)
+	sig := make(map[string]any, MaxCols+2)
 	for c := 0; c < MaxCols; c++ {
 		sig["_w"+strconv.Itoa(c)] = colWidthOf(widths, c)
 	}
 	sig["rc"] = -1
+
+	// The row heights ride the same frame. Both axes are woken by the same flag
+	// (markSheetWidths), and a viewer that has the new geometry in CSS but not in
+	// its offset table would paint the rows correctly and answer a click with the
+	// wrong one — which is exactly the state the first version of this shipped in.
+	if heights, herr := sh.RowHeights(0, sh.Rows()-1); herr == nil {
+		rows := make([]int, 0, len(heights)*2)
+		for _, r := range sortedKeys(heights) {
+			rows = append(rows, r, heights[r])
+		}
+		sig[heightSignal] = rows
+	}
 	return sse.MarshalAndPatchSignals(sig)
 }
 
