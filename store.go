@@ -214,7 +214,7 @@ type Event struct {
 // file gains them by ALTER TABLE ADD COLUMN, which appends; declaring them
 // elsewhere would give a migrated and a fresh file different column orders for
 // the same schema version.
-const schemaVersion = 7
+const schemaVersion = 8
 
 // styleColDDL is the exact column definition, shared by the CREATE TABLE below
 // and by the v5 -> v6 ALTER, so a migrated file and a fresh one cannot disagree
@@ -682,6 +682,9 @@ func inTx(db *sql.DB, fn func(tx *sql.Tx) error) error {
 // v5 -> v6 adds cell styling and v6 -> v7 adds the column and row levels of the
 // style cascade. Both are ALTER TABLE ADD COLUMN plus CREATE TABLE and rewrite
 // no cell; see each step for why neither can be a reinterpretation.
+//
+// v7 -> v8 adds text wrapping to the style record, which is one more column and
+// a wider uniqueness constraint over the same rows.
 func migrate(db *sql.DB) error {
 	var v int
 	if err := db.QueryRow(`PRAGMA user_version`).Scan(&v); err != nil {
@@ -780,6 +783,30 @@ func migrate(db *sql.DB) error {
 	}
 	if _, err := tx.Exec(rowMetaDDL); err != nil {
 		return fmt.Errorf("create rows table: %w", err)
+	}
+
+	// v7 -> v8: styles gain wrap. A v7 style row encodes no wrapping, so 0 is
+	// the only correct value and ADD COLUMN's DEFAULT supplies it as a
+	// schema-text change. The index has to be rebuilt in the same step: it is
+	// what makes interning return one id per distinct look, and left at its v7
+	// six columns it would collapse a wrapped style onto the unwrapped one it
+	// otherwise matches and hand back the wrong id.
+	styleHave, err := columnSet(tx, "styles")
+	if err != nil {
+		return err
+	}
+	if _, ok := styleHave["wrap"]; !ok {
+		if _, err := tx.Exec(`ALTER TABLE styles ADD COLUMN ` + wrapColDDL); err != nil {
+			return fmt.Errorf("add column wrap to styles: %w", err)
+		}
+		if _, err := tx.Exec(`DROP INDEX IF EXISTS styles_tuple`); err != nil {
+			return fmt.Errorf("drop styles_tuple: %w", err)
+		}
+		if _, err := tx.Exec(
+			`CREATE UNIQUE INDEX styles_tuple ON styles (bold, italic, fg, bg, align, numfmt, wrap)`,
+		); err != nil {
+			return fmt.Errorf("rebuild styles_tuple: %w", err)
+		}
 	}
 
 	// Every file arrives here key-shaped. Give it a band index if it has none —

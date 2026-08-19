@@ -400,7 +400,7 @@ func styleDispatch(detail string) string {
 	return `window.__ss&&window.__ss.sy(` + detail + `)`
 }
 
-// styleToolbarHTML is the whole toolbar: two toggles, two colour pickers with
+// styleToolbarHTML is the whole toolbar: three toggles, two colour pickers with
 // quick swatches, three alignments, seven number formats and a reset.
 //
 // All of it is page shell, written once per load and re-sent by nothing — the
@@ -439,6 +439,13 @@ func styleToolbarHTML() string {
 		b.WriteString(`<button class="tg" title="Align ` + a.label[6:] + `" aria-label="` + a.label +
 			`" data-on:click="` + styleDispatch(`{set:{align:'`+a.op+`'}}`) + `">` + a.glyph + `</button>`)
 	}
+
+	// Wrap sits with the alignments because that is what it is — where the text
+	// breaks — and because it is the only formatting control whose effect is a
+	// row too short to show its own contents. Fit-to-contents on the gutter is
+	// the other half of the gesture.
+	b.WriteString(`<button class="tg" title="Wrap text" aria-label="wrap text" data-on:click="` +
+		styleDispatch(`{tog:'wrap'}`) + `">⤶</button>`)
 
 	// A `<select>` because the format set is closed and seven long. It is the one
 	// control that takes keyboard focus, which is why the grid's `__window`
@@ -507,7 +514,7 @@ func styleIssuerHTML(sheetID string) string {
 //	              follower.
 //	sy(detail)    dispatch a style command, so eighteen toolbar controls and two
 //	              keystrokes name one event instead of repeating the dispatch.
-//	tog(k,ref)    the value bold/italic should take at the active cell: true when
+//	tog(k,ref)    the value bold/italic/wrap should take at the active cell: true when
 //	              it is not currently on. It reads getComputedStyle — the
 //	              browser's own resolution of the rules the server generated —
 //	              rather than parsing the class and modelling the cascade a
@@ -521,7 +528,9 @@ func styleScript() string {
  return '';};
 T.tog=function(k,ref){var e=document.getElementById(ref);if(!e)return true;
  var s=getComputedStyle(e);
- return k==='bold'?!(+s.fontWeight>=600):s.fontStyle!=='italic';};
+ if(k==='bold')return !(+s.fontWeight>=600);
+ if(k==='wrap')return s.whiteSpace!=='pre-wrap';
+ return s.fontStyle!=='italic';};
 T.sy=function(o){window.dispatchEvent(new CustomEvent('` + styleEvent + `',{detail:o}));};
 `
 }

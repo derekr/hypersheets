@@ -1961,14 +1961,83 @@ func TestCSSFullStatesEveryProperty(t *testing.T) {
 		s    Style
 		want string
 	}{
-		{Style{}, "font-weight:400;font-style:normal;color:inherit;background:transparent"},
-		{Style{Bold: true}, "font-weight:700;font-style:normal;color:inherit;background:transparent"},
+		{Style{}, "font-weight:400;font-style:normal;color:inherit;background:transparent;" + noWrapCSS[:len(noWrapCSS)-1]},
+		{Style{Bold: true}, "font-weight:700;font-style:normal;color:inherit;background:transparent;" + noWrapCSS[:len(noWrapCSS)-1]},
 		{Style{FG: "#c00000", Align: AlignRight},
-			"font-weight:400;font-style:normal;color:#c00000;background:transparent;text-align:right"},
+			"font-weight:400;font-style:normal;color:#c00000;background:transparent;text-align:right;" + noWrapCSS[:len(noWrapCSS)-1]},
+		// Wrap is the property a cell most needs to be able to state in both
+		// directions: a wrapped column with one cell forced back to a single
+		// line is the whole reason CSSFull exists.
+		{Style{Wrap: true},
+			"font-weight:400;font-style:normal;color:inherit;background:transparent;" + wrapCSS[:len(wrapCSS)-1]},
 	}
 	for _, tc := range cases {
 		if got := tc.s.CSSFull(); got != tc.want {
 			t.Errorf("%+v.CSSFull() = %q, want %q", tc.s, got, tc.want)
 		}
+	}
+}
+
+// A v7 file's styles table has six columns and a six-column uniqueness
+// constraint. Adding wrap to the record without widening that index would make
+// interning hand back the id of the unwrapped style that matches on the other
+// six — the sheet would accept the command, report success, and change nothing.
+//
+// The fixture is built by taking the current schema apart rather than by
+// restating v7's DDL, so it cannot drift into describing a version that never
+// shipped.
+func TestMigratesV7StylesToWrap(t *testing.T) {
+	c := newTestCache(t, 4, time.Minute)
+	sh := mustOpen(t, c, "v7wrap")
+	mustSetStyle(t, sh, []CellRef{{Row: 0, Col: 0}}, StylePatch{Bold: Set(true)})
+	path := sh.path
+	c.Close()
+
+	old, err := sql.Open("sqlite", "file:"+path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, stmt := range []string{
+		`DROP INDEX styles_tuple`,
+		`ALTER TABLE styles DROP COLUMN wrap`,
+		`CREATE UNIQUE INDEX styles_tuple ON styles (bold, italic, fg, bg, align, numfmt)`,
+		`PRAGMA user_version = 7`,
+	} {
+		if _, err := old.Exec(stmt); err != nil {
+			t.Fatalf("%s: %v", stmt, err)
+		}
+	}
+	if err := old.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	c2 := newTestCache(t, 4, time.Minute)
+	c2.dir = c.dir
+	sh2 := mustOpen(t, c2, "v7wrap")
+
+	var v int
+	if err := sh2.use(func(db *sql.DB) error {
+		return db.QueryRow(`PRAGMA user_version`).Scan(&v)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if v != schemaVersion {
+		t.Fatalf("user_version after migration = %d, want %d", v, schemaVersion)
+	}
+
+	// The v7 style is intact and still unwrapped.
+	_, eff := effectiveOf(t, sh2, CellRef{Row: 0, Col: 0})
+	if st := sh2.StyleByID(eff); !st.Bold || st.Wrap {
+		t.Fatalf("the v7 style did not survive: %+v", st)
+	}
+	// And its wrapped twin is a different row, which is the whole point of the
+	// rebuilt index.
+	mustSetStyle(t, sh2, []CellRef{{Row: 1, Col: 0}}, StylePatch{Bold: Set(true), Wrap: Set(true)})
+	_, eff2 := effectiveOf(t, sh2, CellRef{Row: 1, Col: 0})
+	if eff2 == eff {
+		t.Fatal("a wrapped style interned onto the unwrapped one: the tuple index was not widened")
+	}
+	if st := sh2.StyleByID(eff2); !st.Bold || !st.Wrap {
+		t.Fatalf("the wrapped style did not round-trip: %+v", st)
 	}
 }

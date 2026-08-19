@@ -149,7 +149,8 @@ func TestStyleRulesCanBeatTheKindRules(t *testing.T) {
 	// the bottom of a three-level cascade and has to be able to override a row
 	// or a column BACK to plain, and an empty declaration is not an override.
 	// See Style.CSSFull and DATA-MODEL Change 6.
-	want := `#` + bufferID + ` b.s3{font-weight:700;font-style:normal;color:#cc0000;background:` + sheetBG + `}`
+	want := `#` + bufferID + ` b.s3{font-weight:700;font-style:normal;color:#cc0000;background:` +
+		sheetBG + `;` + noWrapCSS[:len(noWrapCSS)-1] + `}`
 	if css != want {
 		t.Errorf("\n got %q\nwant %q", css, want)
 	}

@@ -14,7 +14,7 @@ import (
 // style.go — cell styling and number formats.
 //
 // A cell does not store its appearance; it stores an integer indexing a
-// per-sheet table of distinct (bold, italic, fg, bg, align, numfmt) tuples, the
+// per-sheet table of distinct (bold, italic, fg, bg, align, numfmt, wrap) tuples, the
 // way XLSX's `<c r="B5" s="3"/>` indexes a shared style table. A sheet has
 // thousands of cells and a dozen distinct looks, so the look stays O(distinct
 // styles) while the markup stays O(cells): the render layer emits
@@ -173,6 +173,11 @@ type Style struct {
 	BG     string
 	Align  Align
 	Fmt    NumFmt
+	// Wrap is alignment, not decoration: it changes where the text breaks, which
+	// changes how tall the row has to be. It is the one style property whose
+	// consequence is geometry, and the reason fit-to-contents has anything to
+	// fit to.
+	Wrap bool
 }
 
 // DefaultStyle is style id 0: the look a cell has when nobody has styled it. It
@@ -269,8 +274,21 @@ func (s Style) CSS() string {
 	case AlignRight:
 		b.WriteString("text-align:right;")
 	}
+	if s.Wrap {
+		b.WriteString(wrapCSS)
+	}
 	return strings.TrimSuffix(b.String(), ";")
 }
+
+// The two spellings of wrap. A cell's line box is the row's pitch so a single
+// line sits centred in it, which is wrong the moment there are two — hence the
+// line-height in both, restated rather than inherited so a cell can turn a
+// wrapped column back off. `anywhere` because the alternative for a cell
+// narrower than one word is a horizontal overflow the grid cannot show.
+const (
+	wrapCSS   = "white-space:pre-wrap;overflow-wrap:anywhere;line-height:16px;"
+	noWrapCSS = "white-space:nowrap;overflow-wrap:normal;line-height:calc(var(--rh) - 1px);"
+)
 
 // CSSFull is CSS with every property stated, including the ones this style
 // leaves at their default. The render layer must use it for the cell-level
@@ -318,6 +336,11 @@ func (s Style) CSSFull() string {
 	case AlignRight:
 		b.WriteString("text-align:right;")
 	}
+	if s.Wrap {
+		b.WriteString(wrapCSS)
+	} else {
+		b.WriteString(noWrapCSS)
+	}
 	return strings.TrimSuffix(b.String(), ";")
 }
 
@@ -345,6 +368,7 @@ type StylePatch struct {
 	BG     *string
 	Align  *Align
 	Fmt    *NumFmt
+	Wrap   *bool
 }
 
 // Set returns a pointer to v, so a StylePatch can be written as a literal.
@@ -353,7 +377,7 @@ func Set[T any](v T) *T { return &v }
 // Empty reports a patch that would change nothing.
 func (p StylePatch) Empty() bool {
 	return p.Bold == nil && p.Italic == nil && p.FG == nil && p.BG == nil &&
-		p.Align == nil && p.Fmt == nil
+		p.Align == nil && p.Fmt == nil && p.Wrap == nil
 }
 
 // apply merges the patch over one cell's existing style.
@@ -375,6 +399,9 @@ func (p StylePatch) apply(s Style) Style {
 	}
 	if p.Fmt != nil {
 		s.Fmt = *p.Fmt
+	}
+	if p.Wrap != nil {
+		s.Wrap = *p.Wrap
 	}
 	return s
 }
@@ -427,6 +454,9 @@ func (p StylePatch) String() string {
 	if p.Fmt != nil {
 		parts = append(parts, "fmt="+p.Fmt.String())
 	}
+	if p.Wrap != nil {
+		parts = append(parts, "wrap="+strconv.FormatBool(*p.Wrap))
+	}
 	if len(parts) == 0 {
 		return "(no change)"
 	}
@@ -438,20 +468,23 @@ func (p StylePatch) String() string {
 // empty value means "reset to the default" — the wire spelling of StylePatch's
 // pointers, and why signals cannot be a Style.
 //
-// Recognized keys: bold, italic, fg, bg, align, fmt.
+// Recognized keys: bold, italic, wrap, fg, bg, align, fmt.
 func ParseStylePatch(fields map[string]string) (StylePatch, error) {
 	var p StylePatch
 	for k, v := range fields {
 		switch strings.ToLower(strings.TrimSpace(k)) {
-		case "bold", "italic":
+		case "bold", "italic", "wrap":
 			b, err := parseStyleBool(v)
 			if err != nil {
 				return StylePatch{}, fmt.Errorf("%s: %w", k, err)
 			}
-			if k == "bold" {
+			switch k {
+			case "bold":
 				p.Bold = &b
-			} else {
+			case "italic":
 				p.Italic = &b
+			default:
+				p.Wrap = &b
 			}
 		case "fg", "color", "colour":
 			c, err := normalizeColor(v)
@@ -609,11 +642,17 @@ CREATE TABLE IF NOT EXISTS styles (
   fg     TEXT    NOT NULL DEFAULT '',
   bg     TEXT    NOT NULL DEFAULT '',
   align  INTEGER NOT NULL DEFAULT 0,
-  numfmt INTEGER NOT NULL DEFAULT 0
+  numfmt INTEGER NOT NULL DEFAULT 0,
+  ` + wrapColDDL + `
 );
 CREATE UNIQUE INDEX IF NOT EXISTS styles_tuple
-  ON styles (bold, italic, fg, bg, align, numfmt);
+  ON styles (bold, italic, fg, bg, align, numfmt, wrap);
 `
+
+// wrapColDDL is the exact column definition, shared by the CREATE TABLE above
+// and by the v7 -> v8 ALTER, so a migrated file and a fresh one cannot disagree
+// about the column they both claim to have.
+const wrapColDDL = `wrap INTEGER NOT NULL DEFAULT 0`
 
 // styleTable is a sheet's style index, held in memory. It is immutable and
 // swapped wholesale under Sheet.idxMu — the band index's lock, not one of its
@@ -789,19 +828,19 @@ func (t *styleTable) rules() []StyleRule {
 
 func loadStyleTable(q queryer) (*styleTable, error) {
 	rows, err := q.Query(
-		`SELECT id, bold, italic, fg, bg, align, numfmt FROM styles ORDER BY id`)
+		`SELECT id, bold, italic, fg, bg, align, numfmt, wrap FROM styles ORDER BY id`)
 	if err != nil {
 		return nil, fmt.Errorf("read styles: %w", err)
 	}
 	defer rows.Close()
 	t := newStyleTable()
 	for rows.Next() {
-		var id, bold, italic, align, numfmt int
+		var id, bold, italic, align, numfmt, wrap int
 		var s Style
-		if err := rows.Scan(&id, &bold, &italic, &s.FG, &s.BG, &align, &numfmt); err != nil {
+		if err := rows.Scan(&id, &bold, &italic, &s.FG, &s.BG, &align, &numfmt, &wrap); err != nil {
 			return nil, fmt.Errorf("scan style: %w", err)
 		}
-		s.Bold, s.Italic = bold != 0, italic != 0
+		s.Bold, s.Italic, s.Wrap = bold != 0, italic != 0, wrap != 0
 		s.Align, s.Fmt = Align(align), NumFmt(numfmt)
 		// A row whose tuple is the default is kept, not skipped: under a
 		// cascade it is a cell saying "I override the level back to plain"
@@ -981,9 +1020,10 @@ func rowStyleOf(q queryer, bi *bandIndex, row int) (int, error) {
 
 func insertStyle(tx *sql.Tx, id int, s Style) error {
 	_, err := tx.Exec(
-		`INSERT INTO styles (id, bold, italic, fg, bg, align, numfmt)
-		   VALUES (?, ?, ?, ?, ?, ?, ?)`,
-		id, boolInt(s.Bold), boolInt(s.Italic), s.FG, s.BG, int(s.Align), int(s.Fmt))
+		`INSERT INTO styles (id, bold, italic, fg, bg, align, numfmt, wrap)
+		   VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		id, boolInt(s.Bold), boolInt(s.Italic), s.FG, s.BG, int(s.Align), int(s.Fmt),
+		boolInt(s.Wrap))
 	if err != nil {
 		return fmt.Errorf("insert style %d: %w", id, err)
 	}
