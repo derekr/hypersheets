@@ -66,6 +66,33 @@ a blank buffer goes from 531 nodes to roughly 781. Still 18x better than the
 14,005 the table-based render cost, and the byte cost is ~250 near-identical
 elements, which brotli takes to almost nothing.
 
+## Empty rows: one strip each, or grouped runs? — measured
+
+A run of empty rows could collapse into one element drawing its own lines with
+the gradient (correct within a run, since the pitch there really is uniform). It
+was worth measuring rather than arguing. Prototyped both, blank sheet, six buffer
+slides each:
+
+| | nodes at rest | nodes after scrolling | morph median | blank brotli | dense brotli |
+| --- | --- | --- | --- | --- | --- |
+| gradient | 282 | 482 | 6.0 ms | 10,026 | 29,277 |
+| one strip per row | 532 | 732 | 6.3 ms | 10,407 | 29,817 |
+
+**One strip per row costs about 0.3 ms of morph and about 400 compressed bytes**,
+and the samples overlap — 2.9/5.5/5.8/6.0/6.6/6.7 against
+2.3/5.5/6.2/6.3/6.6/7.1 — so even that is near the noise floor at six samples.
+
+Grouping would win back those 400 bytes at the cost of splitting one element into
+three whenever a cell is written into an empty row, which is the most common
+operation on the incremental patch path. **Take the simple one.**
+
+Two things make it cheaper than it looks. The gutter needs no new elements: it
+already emits one `<b>` per buffered row for the row number, so its rule is a
+`border-bottom` on an element that exists. And grouping stays available later as
+a pure rendering optimisation, because offsets come from the sparse height
+records rather than being measured off the DOM — the client never asks an element
+where a row is.
+
 ## The hard part: offsets stop being multiplication
 
 `top = row × 22` is currently assumed in eleven Go references, seventeen CSS
