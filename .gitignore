@@ -14,7 +14,3 @@ trace.jsonl
 
 # Editor / OS
 .DS_Store
-
-# The DuckDB spike is its own module and pulls a large cgo dependency tree.
-# Its source is tracked; its build products are not.
-spike/**/duckspike
