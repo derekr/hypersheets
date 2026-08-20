@@ -1482,10 +1482,16 @@ const rzCancelExpr = `if(window.__ss)window.__ss.rzCancel();$rc=-1`
 //
 // So the client closes it from `datastar-fetch`, which Datastar dispatches on
 // `document` for any response >= 400 and for a transport failure, with `el` set
-// to the issuing element. The test is a class rather than a list of ids, so the
-// backstop can only fire for an element that actually raised the chip. `$note` is
-// written only when still empty, so a refusal that did reach a handler keeps the
-// specific words.
+// to the issuing element. `$note` is written only when still empty, so a refusal
+// that did reach a handler keeps the specific words.
+//
+// EVERY refused command says so, not only the ones that raised the chip. The
+// class used to gate the whole handler, which meant a command posted from an
+// element with no pending chip — a resize, say — could be refused with a 400 and
+// leave no trace anywhere: nothing on screen, and nothing in the server's log
+// either, since a request rejected while reading its signals never reaches the
+// line that logs it. A row drag spent four rounds of debugging in that gap. The
+// class now decides only whether a chip needs lowering.
 const (
 	failEvent      = "ssfail"
 	pendingWriteCl = "pw"
@@ -1506,8 +1512,7 @@ func pendingRaise(label string) string {
 
 func chipFailScript() string {
 	return `document.addEventListener('datastar-fetch',function(v){var d=v.detail;
- if(!d||d.type!=='error'||!d.el||!d.el.classList)return;
- if(!d.el.classList.contains('` + pendingWriteCl + `'))return;
+ if(!d||d.type!=='error')return;
  window.dispatchEvent(new Event('` + failEvent + `'));});
 `
 }
@@ -2289,7 +2294,7 @@ T.gdHide=function(){if(gdEl)gdEl.style.display='none';};
 // lays out once, on release, instead of once per frame.
 var rzX=0,rzW=0,rzC=-1;
 T.rzStart=function(c,x,w){rzC=c;rzX=x;rzW=w;T.gdShow('x',x,w);};
-T.rzAt=function(x){var v=rzW+(x-rzX);
+T.rzAt=function(x){var v=Math.round(rzW+(x-rzX));
  return v<` + strconv.Itoa(MinColWidth) + `?` + strconv.Itoa(MinColWidth) +
 		`:(v>` + strconv.Itoa(MaxColWidth) + `?` + strconv.Itoa(MaxColWidth) + `:v);};
 // The guide follows the CLAMPED width, not the raw pointer, so dragging past the
@@ -2334,7 +2339,17 @@ T.rzDownR=function(e){if(e.button!==0)return false;
  var r=T.gripAt(e);if(r<0)return false;
  e.preventDefault();rzR=r;rzYy=e.clientY;rzHh=T.hOf(r);T.gdShow('y',e.clientY,rzHh);
  return true;};
-T.rzAtR=function(y){var v=rzHh+(y-rzYy);return v<MINH?MINH:(v>MAXH?MAXH:v);};
+// ROUNDED, and this is not tidiness. A pointer coordinate is fractional on any
+// display that is not at 1:1 device pixels, so an unrounded drag commits
+// something like 130.51953125 — which the command refuses, because a height is
+// an integer number of pixels and a JSON float will not unmarshal into one. The
+// refusal is a 400 the gesture never surfaces, so the drag simply does nothing.
+//
+// The tell was that every resize that ever succeeded landed on exactly the
+// minimum: the clamp returns an integer constant, and that was the only path by
+// which a value survived at all.
+T.rzAtR=function(y){var v=Math.round(rzHh+(y-rzYy));
+ return v<MINH?MINH:(v>MAXH?MAXH:v);};
 T.rzMoveR=function(y){if(rzR<0)return false;
  var h=T.rzAtR(y);T.gdMove(rzYy+(h-rzHh),h);return true;};
 T.rzEndR=function(y){if(rzR<0)return null;var r=rzR,h=T.rzAtR(y);
@@ -2359,7 +2374,7 @@ T.fitR=function(r){var d='--r:'+r,h=0,i,
  for(i=0;i<q.length;i++)q[i].classList.add('` + measureClass + `');
  for(i=0;i<q.length;i++)if(q[i].offsetHeight>h)h=q[i].offsetHeight;
  for(i=0;i<q.length;i++)q[i].classList.remove('` + measureClass + `');
- h=h?h+1:RH;
+ h=h?Math.ceil(h)+1:RH;
  return h<MINH?MINH:(h>MAXH?MAXH:h);};
 T.rzLive=function(){return rzC;};
 T.anchorRow=+((vp&&vp.dataset.ar)||0);

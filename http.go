@@ -1735,8 +1735,8 @@ var clearRefusal = "Can’t clear more than " + strconv.Itoa(maxClearCells) +
 // ─── POST /s/{sheetID}/colwidth ───────────────────────────────────────────────
 
 type colResizeSignals struct {
-	Rc int `json:"rc"` // the column being resized
-	Rw int `json:"rw"` // its new width in px, as the drag left it
+	Rc int   `json:"rc"` // the column being resized
+	Rw pxNum `json:"rw"` // its new width in px, as the drag left it
 
 	// Conn names the screen that dragged, and it is here only for the log: it
 	// turns "a column got wider" into "who widened it". It rides free, since this
@@ -1773,11 +1773,11 @@ func (s *Server) handleColWidth(w http.ResponseWriter, r *http.Request) {
 	ctx, span := tracer.Start(r.Context(), "colwidth.command")
 	defer span.End()
 	started := time.Now()
-	px := ClampColWidth(sig.Rw)
+	px := ClampColWidth(sig.Rw.Int())
 	span.SetAttributes(
 		attribute.String("sheet.id", sheetID),
 		attribute.Int("col", sig.Rc),
-		attribute.Int("width.requested", sig.Rw),
+		attribute.Int("width.requested", sig.Rw.Int()),
 		attribute.Int("width.stored", px),
 	)
 
@@ -1809,8 +1809,8 @@ func (s *Server) handleColWidth(w http.ResponseWriter, r *http.Request) {
 
 // rowResizeSignals is what a row drag commits.
 type rowResizeSignals struct {
-	Rr int `json:"rr"` // the row being resized
-	Rh int `json:"rh"` // its new height in px, as the drag left it
+	Rr int   `json:"rr"` // the row being resized
+	Rh pxNum `json:"rh"` // its new height in px, as the drag left it
 
 	// Rf is the height the gesture started from, and it is carried for the log
 	// rather than for the write. A row resize fails silently and invisibly by
@@ -1819,7 +1819,7 @@ type rowResizeSignals struct {
 	// starting point. Without the pair there is nothing in the record to
 	// distinguish "the user asked for that" from "the client measured the wrong
 	// row" — which cost two rounds of guessing at a reproduction.
-	Rf int `json:"rf"`
+	Rf pxNum `json:"rf"`
 
 	Conn string `json:"conn"`
 }
@@ -1851,12 +1851,12 @@ func (s *Server) handleRowHeight(w http.ResponseWriter, r *http.Request) {
 	ctx, span := tracer.Start(r.Context(), "rowheight.command")
 	defer span.End()
 	started := time.Now()
-	px := ClampRowHeight(sig.Rh)
+	px := ClampRowHeight(sig.Rh.Int())
 	span.SetAttributes(
 		attribute.String("sheet.id", sheetID),
 		attribute.Int("row", sig.Rr),
-		attribute.Int("height.requested", sig.Rh),
-		attribute.Int("height.from", sig.Rf),
+		attribute.Int("height.requested", sig.Rh.Int()),
+		attribute.Int("height.from", sig.Rf.Int()),
 		attribute.Int("height.stored", px),
 	)
 
@@ -1881,7 +1881,7 @@ func (s *Server) handleRowHeight(w http.ResponseWriter, r *http.Request) {
 	span.SetAttributes(attribute.Int("screens.woken", woke))
 	obsLog.InfoContext(ctx, "rowheight",
 		"sheet", sheetID, "conn", sig.Conn, "name", s.authorName(sig.Conn),
-		"row", sig.Rr, "height", px, "from", sig.Rf, "screens", woke,
+		"row", sig.Rr, "height", px, "from", sig.Rf.Int(), "screens", woke,
 		"command_ms", msf(noteCommandNow(started)))
 	s.respondCommand(w)
 }

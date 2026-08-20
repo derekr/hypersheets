@@ -203,8 +203,17 @@ func TestEveryPendingWriterWearsTheBackstopClass(t *testing.T) {
 		t.Error("nothing listens for the backstop event")
 	}
 	js := chipFailScript()
-	if !strings.Contains(js, "d.type!=='error'") || !strings.Contains(js, pendingWriteCl) {
-		t.Errorf("the backstop does not key on a failed fetch from a pending writer: %s", js)
+	if !strings.Contains(js, "d.type!=='error'") {
+		t.Errorf("the backstop does not key on a failed fetch: %s", js)
+	}
+	// AND IT DOES NOT GATE ON THE CLASS. It used to, which meant a command
+	// posted from an element with no chip could be refused and leave no trace at
+	// all — nothing on screen, and nothing in the log either, since a request
+	// rejected while reading its signals never reaches the line that logs it. A
+	// row resize lived in that gap for four rounds of debugging. The class marks
+	// who needs a chip lowered; it does not decide who gets to be heard.
+	if strings.Contains(js, pendingWriteCl) {
+		t.Errorf("only pending writers can report a refusal, so every other command fails silently: %s", js)
 	}
 }
 
