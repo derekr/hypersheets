@@ -1385,10 +1385,14 @@ const rzDownExpr = `const t=evt.target;if(t.tagName!=='I')return;evt.preventDefa
 // hit is decided by where in the row the pointer went down — the bottom few
 // pixels — and `#rn>b::after` gives that band its cursor without being an
 // element of its own.
-var rzRowDownExpr = `const t=evt.target;if(t.tagName!=='B'||!t.parentElement||t.parentElement.id!=='` + gutterID + `')return;` +
-	`const q=t.getBoundingClientRect();if(evt.clientY<q.bottom-` + strconv.Itoa(rowGripPx) + `)return;` +
-	`evt.preventDefault();const rw=+t.style.getPropertyValue('--r');` +
-	`if(window.__ss)window.__ss.rzStartR(rw,evt.clientY,q.height);` +
+var rzRowDownExpr = `if(!window.__ss)return;const rw=window.__ss.gripAt(evt);if(rw<0)return;` +
+	// The gesture is claimed here, not merely started. `#rn` is inside `#vp`, so
+	// without this the same pointerdown also reaches vpPointerDownExpr and drags
+	// a row selection along behind the resize — which is what the user sees,
+	// because the selection repaints on every row crossed and the resize does
+	// not repaint until it commits.
+	`evt.preventDefault();evt.stopPropagation();` +
+	`window.__ss.rzStartR(rw,evt.clientY,evt.target.getBoundingClientRect().height);` +
 	`el.setPointerCapture(evt.pointerId)`
 
 const rzRowMoveExpr = `if(window.__ss)window.__ss.rzMoveR(evt.clientY)`
@@ -1416,9 +1420,10 @@ const rzRowCancelExpr = `if(window.__ss)window.__ss.rzCancelR()`
 // notion of "automatic", so a row that has been fitted stays where it was put
 // until something fits it again.
 func rzRowFitExpr(sheetID string) string {
-	return `const t=evt.target;if(t.tagName!=='B'||!t.parentElement||t.parentElement.id!=='` + gutterID + `')return;` +
-		`const q=t.getBoundingClientRect();if(evt.clientY<q.bottom-` + strconv.Itoa(rowGripPx) + `)return;` +
-		`evt.preventDefault();if(!window.__ss)return;const rw=+t.style.getPropertyValue('--r');` +
+	return `if(!window.__ss)return;const rw=window.__ss.gripAt(evt);if(rw<0)return;` +
+		// Claimed for the same reason the drag is, against a different neighbour:
+		// `#vp` opens the cell editor on a double-click.
+		`evt.preventDefault();evt.stopPropagation();` +
 		`$rr=rw;$rh=window.__ss.fitR(rw);` +
 		`@post('/s/` + sheetID + `/rowheight',{requestCancellation:'disabled'})`
 }
@@ -2159,7 +2164,7 @@ func popExpr(sheetID string) string {
 func anchorScript() string {
 	rh := strconv.Itoa(rowHeightPx)
 	return `<script>(function(){var T=window.__ss;if(!T)return;
-var vp=document.getElementById('vp'),RH=` + rh + `,MINH=` + strconv.Itoa(MinRowHeight) + `,MAXH=` + strconv.Itoa(MaxRowHeight) + `;
+var vp=document.getElementById('vp'),RH=` + rh + `,MINH=` + strconv.Itoa(MinRowHeight) + `,MAXH=` + strconv.Itoa(MaxRowHeight) + `,GRIP=` + strconv.Itoa(rowGripPx) + `;
 // T.rows is the sheet's allocated row extent, and it is a variable: a sheet
 // grows when someone writes past its bottom and shrinks when rows are deleted.
 // Seeded from --rows and re-seeded by T.setRows whenever the _rows signal
@@ -2300,6 +2305,23 @@ T.rzCancel=function(){rzC=-1;T.gdHide();};
 // The same gesture one axis over. The move writes nothing either: a row resize
 // reflows every row below it, so doing that per frame on a dense buffer is the
 // one thing the guide exists to avoid.
+// THE GUTTER SERVES THREE GESTURES and they overlap on the same pixels: click a
+// row number to select the row, drag its bottom edge to resize, double-click
+// that edge to fit. gripAt is the one test that separates them, and both sides
+// consult it — the resize acts on it, the selection declines it (T.rowAt). Two
+// independent guesses at where the grip is would be two chances to disagree, and
+// the way they disagree is that a resize drag also drags a row selection behind
+// it.
+//
+// The column axis draws the same line with an element: its grips are <i> and
+// T.hdrAt ignores them. The row axis has no element to test, because a handle
+// per buffered row would double the gutter's markup for a target the pointer can
+// only be on one of at a time.
+T.gripAt=function(e){var t=e.target;
+ if(!t||t.tagName!=='B'||!t.parentElement||t.parentElement.id!=='` + gutterID + `')return -1;
+ var q=t.getBoundingClientRect();
+ if(e.clientY<q.bottom-GRIP)return -1;
+ return +t.style.getPropertyValue('--r');};
 var rzYy=0,rzHh=0,rzR=-1;
 T.rzStartR=function(r,y,h){rzR=r;rzYy=y;rzHh=h;T.gdShow('y',y);};
 T.rzAtR=function(y){var v=rzHh+(y-rzYy);return v<MINH?MINH:(v>MAXH?MAXH:v);};

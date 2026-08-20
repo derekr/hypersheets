@@ -684,9 +684,18 @@ T.key=function(e,r,c,blo,bhi,fr,fc){var k=e.key,m=e.ctrlKey||e.metaKey;
  if(e.altKey)return null;
  var P=T.pageRows();
  if(m&&(k==='a'||k==='A'))return {all:1};
- if(m&&!e.shiftKey)switch(k){
+ // FILL IS ON CONTROL, NEVER ON COMMAND. Cmd+R is reload, and reload is the
+ // gesture someone reaches for when a page is misbehaving — taking it in a demo
+ // means the recovery key silently writes to their sheet instead. Sheets does
+ // bind Cmd+R on a Mac and gets away with it because people know Sheets. The
+ // Ctrl spelling is Excel's and stays. On Windows, where Ctrl IS the command
+ // key, Ctrl+R is reload and this collides exactly as it does in Excel Online;
+ // that one is a convention worth matching rather than a bug worth inventing a
+ // second binding for.
+ if(e.ctrlKey&&!e.metaKey&&!e.shiftKey)switch(k){
  case 'd': case 'D': return {fill:'d'};
- case 'r': case 'R': return {fill:'r'};
+ case 'r': case 'R': return {fill:'r'};}
+ if(m&&!e.shiftKey)switch(k){
  case 'c': case 'C': return {copy:1};
  case 'v': case 'V': return {paste:1};
  case 'b': case 'B': return {sty:'bold'};
@@ -824,8 +833,13 @@ func selectScript() string {
 T.yRow=function(e){if(!vp)return -1;
  var r=T.rowAtY(e.clientY-vp.getBoundingClientRect().top+vp.scrollTop-CH);
  return (r<0||r>=T.rows)?-1:r;};
+// The grip band belongs to the resize, and this is the row axis's counterpart to
+// hdrAt ignoring the column grips. Declining here is what keeps a resize drag
+// from towing a row selection behind it; the resize also stops the event, so the
+// two guards are belt and braces on purpose — see T.gripAt.
 T.rowAt=function(e){if(!vp)return -1;var rc=vp.getBoundingClientRect();
  if(e.clientX-rc.left>=HW||e.clientY-rc.top<CH)return -1;
+ if(T.gripAt(e)>=0)return -1;
  return T.yRow(e);};
 T.hdrAt=function(e){var t=e.target;if(!t||!t.closest)return -1;
  if(t.tagName==='I'||(t.classList&&t.classList.contains('cr')))return -1;
