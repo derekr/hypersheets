@@ -1220,6 +1220,7 @@ header .tb .fs{height:24px;max-width:7.5rem;border:1px solid #dadce0;border-radi
 #mn button:hover{background:#f1f3f4}
 #mn hr{margin:6px 0;border:0;border-top:1px solid var(--ln)}
 #` + guideID + `{position:fixed;z-index:9;display:none;width:2px;background:var(--bl);pointer-events:none;will-change:transform}
+#` + guideID + `::after{content:attr(data-px);position:absolute;left:6px;top:2px;padding:1px 5px;border-radius:3px;background:var(--bl);color:#fff;font:500 11px/15px Arial,Helvetica,sans-serif;white-space:nowrap}
 #rt{flex:0 0 auto;margin-right:14px;color:#80868b;font-size:11px;white-space:nowrap;cursor:help}
 header .ro{flex:0 0 auto;overflow:visible;color:#b06000;border:1px solid #e0c088;border-radius:3px;padding:1px 6px;font-size:11px;letter-spacing:.04em;text-transform:uppercase;cursor:help}
 #bz{position:fixed;left:50%;bottom:24px;transform:translateX(-50%);z-index:10;padding:10px 16px;border-radius:4px;background:#3c4043;color:#fff;font-size:13px;box-shadow:0 1px 3px rgba(60,64,67,.4);opacity:0;visibility:hidden;animation:bzin 1ms linear 200ms forwards}
@@ -1399,7 +1400,7 @@ const rowResizeDownExpr = `if(window.__ss&&window.__ss.rzDownR(evt))return;`
 
 func rowResizeUpExpr(sheetID string) string {
 	return `if(window.__ss){const v=window.__ss.rzEndR(evt.clientY);if(v){` +
-		`$rr=v.r;$rh=v.h;` +
+		`$rr=v.r;$rh=v.h;$rf=v.f;` +
 		`@post('/s/` + sheetID + `/rowheight',{requestCancellation:'disabled'})}}`
 }
 
@@ -1409,7 +1410,7 @@ func rowResizeUpExpr(sheetID string) string {
 // so a fitted row stays where it was put until something fits it again.
 func rowFitExpr(sheetID string) string {
 	return `if(window.__ss){const rw=window.__ss.gripAt(evt);if(rw>=0){evt.preventDefault();` +
-		`$rr=rw;$rh=window.__ss.fitR(rw);` +
+		`$rr=rw;$rh=window.__ss.fitR(rw);$rf=window.__ss.hOf(rw);` +
 		`@post('/s/` + sheetID + `/rowheight',{requestCancellation:'disabled'});return}}`
 }
 
@@ -1707,7 +1708,7 @@ func pageShellWidths(sheetID string, loRow, hiRow int, grid string, at anchor, w
 	// and `rw` its live width; they are ordinary signals because the commit POST
 	// has to carry them to the server. The 26 `_w` signals it also writes are
 	// local (see colWidthSignals).
-	b.WriteString(`,rc:-1,rw:0,rr:-1,rh:0`)
+	b.WriteString(`,rc:-1,rw:0,rr:-1,rh:0,rf:0`)
 	// The sheet's allocated row extent — how tall the scroll container is, not
 	// how many rows hold data (see (*Sheet).UsedRows for the other one). It is
 	// underscore-prefixed for the same reason the widths are: it is shared sheet
@@ -2267,27 +2268,33 @@ T.track=function(r){urlRow=r;
 // The drag guide, on either axis. Column resize uses 'x'; row resize will use
 // 'y' and needs no new mechanism, only the other two style properties.
 var gdEl=null,gdAxis='x';
-T.gdShow=function(axis,pos){gdEl=gdEl||document.getElementById('` + guideID + `');
+T.gdShow=function(axis,pos,px){gdEl=gdEl||document.getElementById('` + guideID + `');
  if(!gdEl||!vp)return;var r=vp.getBoundingClientRect();gdAxis=axis;
  if(axis==='x'){gdEl.style.top=r.top+'px';gdEl.style.height=r.height+'px';
   gdEl.style.left='0px';gdEl.style.width='2px';}
  else{gdEl.style.left=r.left+'px';gdEl.style.width=r.width+'px';
   gdEl.style.top='0px';gdEl.style.height='2px';}
- gdEl.style.display='block';T.gdMove(pos);};
-T.gdMove=function(pos){if(!gdEl)return;
- gdEl.style.transform=gdAxis==='x'?'translateX('+pos+'px)':'translateY('+pos+'px)';};
+ gdEl.style.display='block';T.gdMove(pos,px);};
+// The readout is the whole reason a drag against the minimum is legible. The
+// guide stops at the clamp, and a line that has stopped moving is
+// indistinguishable from a gesture that has broken — which is exactly how the
+// floor was reported. A number that stops changing is a number that has
+// stopped, and it says what it stopped at.
+T.gdMove=function(pos,px){if(!gdEl)return;
+ gdEl.style.transform=gdAxis==='x'?'translateX('+pos+'px)':'translateY('+pos+'px)';
+ if(px!==undefined)gdEl.dataset.px=px+' px';};
 T.gdHide=function(){if(gdEl)gdEl.style.display='none';};
 // rzStart/rzMove/rzEnd: the column drag. The move writes no signal and touches
 // no width — it moves the guide's transform and nothing else — so a dense buffer
 // lays out once, on release, instead of once per frame.
 var rzX=0,rzW=0,rzC=-1;
-T.rzStart=function(c,x,w){rzC=c;rzX=x;rzW=w;T.gdShow('x',x);};
+T.rzStart=function(c,x,w){rzC=c;rzX=x;rzW=w;T.gdShow('x',x,w);};
 T.rzAt=function(x){var v=rzW+(x-rzX);
  return v<` + strconv.Itoa(MinColWidth) + `?` + strconv.Itoa(MinColWidth) +
 		`:(v>` + strconv.Itoa(MaxColWidth) + `?` + strconv.Itoa(MaxColWidth) + `:v);};
 // The guide follows the CLAMPED width, not the raw pointer, so dragging past the
 // minimum stops the line where the column would actually stop.
-T.rzMove=function(x){if(rzC<0)return;T.gdMove(rzX+(T.rzAt(x)-rzW));};
+T.rzMove=function(x){if(rzC<0)return;var w=T.rzAt(x);T.gdMove(rzX+(w-rzW),w);};
 T.rzEnd=function(x){if(rzC<0)return null;var c=rzC,w=T.rzAt(x);
  rzC=-1;T.gdHide();return {c:c,w:w};};
 T.rzCancel=function(){rzC=-1;T.gdHide();};
@@ -2325,12 +2332,13 @@ T.gripAt=function(e){var t=e.target;
 var rzYy=0,rzHh=0,rzR=-1;
 T.rzDownR=function(e){if(e.button!==0)return false;
  var r=T.gripAt(e);if(r<0)return false;
- e.preventDefault();rzR=r;rzYy=e.clientY;rzHh=T.hOf(r);T.gdShow('y',e.clientY);
+ e.preventDefault();rzR=r;rzYy=e.clientY;rzHh=T.hOf(r);T.gdShow('y',e.clientY,rzHh);
  return true;};
 T.rzAtR=function(y){var v=rzHh+(y-rzYy);return v<MINH?MINH:(v>MAXH?MAXH:v);};
-T.rzMoveR=function(y){if(rzR<0)return false;T.gdMove(rzYy+(T.rzAtR(y)-rzHh));return true;};
+T.rzMoveR=function(y){if(rzR<0)return false;
+ var h=T.rzAtR(y);T.gdMove(rzYy+(h-rzHh),h);return true;};
 T.rzEndR=function(y){if(rzR<0)return null;var r=rzR,h=T.rzAtR(y);
- rzR=-1;T.gdHide();return h===rzHh?null:{r:r,h:h};};
+ rzR=-1;T.gdHide();return h===rzHh?null:{r:r,h:h,f:rzHh};};
 // The one layout fact the client originates. The server has no font metrics, so
 // the height a row needs is measurable only where the text is laid out — and
 // then it travels as an ordinary resize command, which is why fitting and

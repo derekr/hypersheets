@@ -19,10 +19,17 @@ import (
 )
 
 const (
-	// MinRowHeight is one line of the smallest text the grid renders plus its
-	// rule. Below this a row cannot show what is in it, and the drag handle
-	// becomes hard to hit.
-	MinRowHeight = 16
+	// MinRowHeight is a squashed row, not a legible one — collapsing a row is a
+	// thing people do to spreadsheets on purpose, and this is how far down that
+	// goes.
+	//
+	// It was 16, reasoned from "one line of the smallest text plus its rule",
+	// which is the wrong question: it made the floor six pixels below the
+	// default. Every downward drag hit it almost immediately, and hitting it is
+	// silent — the clamped height equals the height the row already had, so the
+	// commit is skipped and nothing whatsoever happens. The gesture read as
+	// broken rather than as finished, and rows piled up at exactly 16.
+	MinRowHeight = 6
 
 	// MaxRowHeight bounds one row to something a viewport can still show
 	// alongside its neighbours. It is generous because fit-to-contents on a

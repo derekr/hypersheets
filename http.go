@@ -1812,6 +1812,15 @@ type rowResizeSignals struct {
 	Rr int `json:"rr"` // the row being resized
 	Rh int `json:"rh"` // its new height in px, as the drag left it
 
+	// Rf is the height the gesture started from, and it is carried for the log
+	// rather than for the write. A row resize fails silently and invisibly by
+	// nature: what arrives is one plausible integer, and every wrong answer this
+	// gesture has produced was a plausible integer computed from a wrong
+	// starting point. Without the pair there is nothing in the record to
+	// distinguish "the user asked for that" from "the client measured the wrong
+	// row" — which cost two rounds of guessing at a reproduction.
+	Rf int `json:"rf"`
+
 	Conn string `json:"conn"`
 }
 
@@ -1847,6 +1856,7 @@ func (s *Server) handleRowHeight(w http.ResponseWriter, r *http.Request) {
 		attribute.String("sheet.id", sheetID),
 		attribute.Int("row", sig.Rr),
 		attribute.Int("height.requested", sig.Rh),
+		attribute.Int("height.from", sig.Rf),
 		attribute.Int("height.stored", px),
 	)
 
@@ -1871,7 +1881,7 @@ func (s *Server) handleRowHeight(w http.ResponseWriter, r *http.Request) {
 	span.SetAttributes(attribute.Int("screens.woken", woke))
 	obsLog.InfoContext(ctx, "rowheight",
 		"sheet", sheetID, "conn", sig.Conn, "name", s.authorName(sig.Conn),
-		"row", sig.Rr, "height", px, "screens", woke,
+		"row", sig.Rr, "height", px, "from", sig.Rf, "screens", woke,
 		"command_ms", msf(noteCommandNow(started)))
 	s.respondCommand(w)
 }

@@ -128,7 +128,7 @@ func TestTotalHeightCountsOnlyTheDifference(t *testing.T) {
 	if err := sh.SetRowHeight([]int{2}, 62); err != nil { // +40
 		t.Fatal(err)
 	}
-	if err := sh.SetRowHeight([]int{9}, 12); err != nil { // clamps to 16, -6
+	if err := sh.SetRowHeight([]int{9}, 2); err != nil { // below the floor, clamps
 		t.Fatal(err)
 	}
 	got, err := sh.TotalHeight()
@@ -262,5 +262,44 @@ func TestTheShellShipsTheHeightsAndTheReader(t *testing.T) {
 	}
 	if !strings.Contains(page, "setHeights") {
 		t.Error("nothing wires the height signal into the client")
+	}
+}
+
+// THE FLOOR MUST NOT SIT NEXT TO THE DEFAULT. It was 16 against a 22px default,
+// which gave a downward drag six pixels of travel before it clamped — and
+// clamping is silent, because the clamped height equals the height the row
+// already has, so the commit is skipped and nothing happens at all. Every
+// downward drag therefore looked broken, and rows piled up at exactly 16.
+//
+// The number itself is a judgement call; the ratio is not.
+func TestTheRowFloorLeavesRoomToDragDownTo(t *testing.T) {
+	if travel := rowHeightPx - MinRowHeight; travel < rowHeightPx/2 {
+		t.Errorf("a downward drag has only %dpx of travel from the default (%d) before it clamps at %d",
+			travel, rowHeightPx, MinRowHeight)
+	}
+}
+
+// And the drag says what height it is on, so a guide that has stopped moving
+// reads as "this is the minimum" rather than as "this is broken".
+func TestTheResizeGuideReportsItsHeight(t *testing.T) {
+	js := anchorScript()
+	for _, want := range []string{
+		"T.gdMove=function(pos,px)",
+		"gdEl.dataset.px=px+' px'",
+		"T.gdShow('y',e.clientY,rzHh)",
+		"T.gdMove(rzYy+(h-rzHh),h)",
+	} {
+		if !strings.Contains(js, want) {
+			t.Errorf("the row drag has no live readout: %q is missing", want)
+		}
+	}
+	// The column drag shares the guide and gets the same readout for free.
+	for _, want := range []string{"T.gdShow('x',x,w)", "T.gdMove(rzX+(w-rzW),w)"} {
+		if !strings.Contains(js, want) {
+			t.Errorf("the column drag has no live readout: %q is missing", want)
+		}
+	}
+	if !strings.Contains(gridCSS, `content:attr(data-px)`) {
+		t.Error("the guide's readout has no rule, so the number never renders")
 	}
 }
