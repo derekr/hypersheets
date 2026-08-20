@@ -46,6 +46,7 @@ var (
 	strict   = flag.Bool("strict", false, "fail on type errors instead of resolving what it can")
 	explain  = flag.String("explain", "", "a domain pair like sheet->web: show which FILES make that edge, and why")
 	sections = flag.Int("sections", 0, "files longer than this many lines, split along the section banners they already carry")
+	cost     = flag.Bool("cost", false, "what turning this grouping into Go packages would actually cost")
 )
 
 // A domain is a name and the files it claims. The orderings below are proposals
@@ -381,6 +382,47 @@ func main() {
 		}
 		fmt.Printf("\n  %d files, %d lines, %d existing sections -> ~%d lines per file after a split along them\n",
 			len(long), total, pieces, total/max(pieces, 1))
+	}
+
+	// WHAT PACKAGES WOULD COST, in the only currency that matters here: how much
+	// of the code a reader would have to see differently.
+	//
+	// In Go, moving files into directories IS making packages — there is no
+	// cheaper version. So every symbol that crosses a domain boundary has to
+	// become exported, and every use of it has to become qualified. Both are
+	// permanent changes to how the code reads, paid on every line forever, so
+	// the number is worth having before the taste argument starts.
+	if *cost {
+		exports := map[string]map[string]bool{} // domain -> symbols it must export
+		sites := 0
+		for id, obj := range info.Uses {
+			if obj == nil || obj.Pkg() == nil || !obj.Pos().IsValid() {
+				continue
+			}
+			from := of[filepath.Base(fset.Position(id.Pos()).Filename)]
+			owner := filepath.Base(fset.Position(obj.Pos()).Filename)
+			to := of[owner]
+			if from == "" || to == "" || from == to {
+				continue
+			}
+			sites++
+			name := obj.Name()
+			if name == "" || !strings.ContainsAny(name[:1], "abcdefghijklmnopqrstuvwxyz") {
+				continue // already exported
+			}
+			if exports[to] == nil {
+				exports[to] = map[string]bool{}
+			}
+			exports[to][symbolName(obj)] = true
+		}
+		fmt.Printf("\ncost of making this grouping into packages:\n")
+		total := 0
+		for _, d := range doms {
+			n := len(exports[d.name])
+			total += n
+			fmt.Printf("  %-10s must export %3d symbols that are unexported today\n", d.name, n)
+		}
+		fmt.Printf("  %-10s %d symbols, and %d call sites become qualified names\n", "TOTAL", total, sites)
 	}
 
 	if *verbose {
