@@ -82,3 +82,43 @@ func TestFillIsNotOnTheCommandKey(t *testing.T) {
 		t.Error("the keymap swallows chords it does not handle, so reload never happens")
 	}
 }
+
+// ENTER MEANS THE SAME THING IN BOTH HALVES OF THE GESTURE: open the cell, then
+// commit it. Excel steps past a selected cell instead and reserves F2 for
+// opening, which makes Enter mean two unrelated things depending on state.
+func TestEnterOpensTheCellAndShiftEnterStillMoves(t *testing.T) {
+	js := gridKeysScript()
+	i := strings.Index(js, "T.key=function")
+	body := js[i : i+strings.Index(js[i:], "T.edit=function")]
+	want := "case 'Enter':      return e.shiftKey?T.mv(r-1,c):{edit:1};"
+	if !strings.Contains(body, want) {
+		t.Errorf("Enter does not open the cell: want %q", want)
+	}
+}
+
+// A cell can hold a line break, so the editor has to be an element that can
+// carry one. An <input> silently drops the character, which would have made
+// Shift+Enter look like it did nothing.
+func TestTheEditorCanHoldALineBreak(t *testing.T) {
+	ed := editorHTML("demo")
+	if !strings.HasPrefix(ed, `<textarea id="`+editorID+`"`) {
+		t.Errorf("the editor cannot hold a newline: %q", ed)
+	}
+	if !strings.HasSuffix(ed, "</textarea>") {
+		t.Errorf("the editor element is not closed: %q", ed)
+	}
+	// Soft wrapping off, so the value the server receives has only the breaks
+	// the user typed.
+	if !strings.Contains(ed, `wrap="off"`) {
+		t.Errorf("the editor may invent line breaks of its own: %q", ed)
+	}
+	// And the keydown handler stands aside for that chord rather than
+	// committing on it.
+	k := editorKeyExpr("demo")
+	if !strings.Contains(k, "if(k==='Enter'&&evt.shiftKey)return;") {
+		t.Errorf("Shift+Enter commits instead of breaking the line: %q", k)
+	}
+	if strings.Index(k, "evt.shiftKey)return;") > strings.Index(k, "$editing=false") {
+		t.Error("the commit runs before the line-break check, so the newline is never typed")
+	}
+}

@@ -163,10 +163,14 @@ const extentEffectExpr = `if(window.__ss){window.__ss.setRows($_rows);window.__s
 // element aborts its in-flight request, and this is the element that issues
 // `@post(.../cell)`. See keys.go for why the commit and the move that follows it
 // come from two elements.
+// A textarea and not an input, for one reason: a cell can hold a line break.
+// Wrapping made that visible — `pre-wrap` renders a newline as a newline — and
+// Shift+Enter is how one is typed. An <input> cannot carry the character at all,
+// so it would have silently dropped what the user pressed.
 func editorHTML(sheetID string) string {
-	return `<input id="` + editorID + `" data-ignore-morph data-bind:raw data-show="$editing"` +
+	return `<textarea id="` + editorID + `" data-ignore-morph data-bind:raw data-show="$editing"` +
 		` data-style="` + cellBoxStyle + `"` +
-		` autocomplete="off" spellcheck="false" aria-label="cell editor"` +
+		` rows="1" wrap="off" autocomplete="off" spellcheck="false" aria-label="cell editor"` +
 		` data-on:keydown="` + editorKeyExpr(sheetID) + `"` +
 		// Blur commits. Clicking another cell, clicking the toolbar or losing the
 		// window must not throw away what the user has typed.
@@ -174,7 +178,7 @@ func editorHTML(sheetID string) string {
 		// The commit anyone else can ask for. Delete-to-clear and the pointerdown
 		// that precedes a click on another cell both dispatch this rather than
 		// posting themselves, so `/cell` has exactly one issuer.
-		` data-on:` + commitEvent + `__window="` + cellPost(sheetID) + `">`
+		` data-on:` + commitEvent + `__window="` + cellPost(sheetID) + `"></textarea>`
 }
 
 // It writes pixels rather than `--r`, and that is not a style preference. Rows are
@@ -1215,7 +1219,7 @@ header .tb .fs{height:24px;max-width:7.5rem;border:1px solid #dadce0;border-radi
 #` + cellOverlayID + `>*,#` + boxOverlayID + `>*,#pc>div{position:absolute;left:0;right:1px;top:var(--t,calc(var(--r) * var(--rh)))}
 #` + selBoxID + `{height:calc(var(--sh,calc(var(--n) * var(--rh))) - 1px);background:rgba(26,115,232,.14);box-shadow:inset 0 0 0 1px rgba(26,115,232,.45)}
 #` + copyBoxID + `{height:calc(var(--sh,calc(var(--n) * var(--rh))) - 1px);outline:2px dashed var(--bl);outline-offset:-2px}
-#` + editorID + `{left:-1px;right:auto;width:calc(100% + 2px);top:calc(var(--t,calc(var(--r) * var(--rh))) - 1px);z-index:4;height:calc(var(--hr,var(--rh)) + 2px);margin:0;padding:0 3px;border:2px solid var(--bl);border-radius:0;background:#fff;color:#202124;font:13px/1 Arial,Helvetica,sans-serif;text-align:right;outline:none;box-shadow:0 1px 3px rgba(60,64,67,.3);pointer-events:auto;user-select:text}
+#` + editorID + `{left:-1px;right:auto;width:calc(100% + 2px);top:calc(var(--t,calc(var(--r) * var(--rh))) - 1px);z-index:4;height:calc(var(--hr,var(--rh)) + 2px);margin:0;padding:0 3px;border:2px solid var(--bl);border-radius:0;background:#fff;color:#202124;font:13px/` + strconv.Itoa(rowHeightPx-1) + `px Arial,Helvetica,sans-serif;text-align:right;outline:none;box-shadow:0 1px 3px rgba(60,64,67,.3);pointer-events:auto;user-select:text;resize:none;overflow:auto;white-space:pre}
 #` + activeCellID + `{left:-1px;right:auto;width:calc(100% + 2px);top:calc(var(--t,calc(var(--r) * var(--rh))) - 1px);z-index:3;height:calc(var(--hr,var(--rh)) + 2px);border:2px solid var(--bl)}
 #mn{position:fixed;z-index:9;min-width:11rem;padding:6px 0;border:1px solid #dadce0;border-radius:4px;background:#fff;box-shadow:0 2px 6px 2px rgba(60,64,67,.15);font-size:13px}
 #mn button{display:block;width:100%;padding:7px 14px;border:0;background:none;color:#202124;font:13px/1 Arial,Helvetica,sans-serif;text-align:left;cursor:pointer}

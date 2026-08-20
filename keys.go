@@ -236,10 +236,14 @@ const selEffectExpr = `if(window.__ss)window.__ss.selq($conn,$ref,` +
 // every Enter would post twice.
 func editorKeyExpr(sheetID string) string {
 	return `if(evt.isComposing)return;const k=evt.key;` +
+		// Shift+Enter is a line break, and the textarea inserts it itself — this
+		// only has to stay out of the way. A cell can hold one because wrapping
+		// renders it (`pre-wrap`), which is what made the key worth binding.
+		`if(k==='Enter'&&evt.shiftKey)return;` +
 		`if(k==='Enter'||k==='Tab'){evt.preventDefault();$editing=false;el.blur();` +
 		cellPost(sheetID) + `;` +
 		`window.dispatchEvent(new CustomEvent('` + navEvent + `',{detail:` +
-		`k==='Tab'?(evt.shiftKey?'l':'r'):(evt.shiftKey?'u':'d')}))}` +
+		`k==='Tab'?(evt.shiftKey?'l':'r'):'d'}))}` +
 		`else if(k==='Escape'){evt.preventDefault();$editing=false;el.blur()}`
 }
 
@@ -714,7 +718,13 @@ T.key=function(e,r,c,blo,bhi,fr,fc){var k=e.key,m=e.ctrlKey||e.metaKey;
  case 'ArrowLeft':  return m?T.edge(r,c,0,-1,blo,bhi):T.mv(r,c-1);
  case 'ArrowRight': return m?T.edge(r,c,0,1,blo,bhi):T.mv(r,c+1);
  case 'Tab':        return T.mv(r,c+(e.shiftKey?-1:1));
- case 'Enter':      return T.mv(r+(e.shiftKey?-1:1),c);
+ // ENTER OPENS THE CELL, it does not step past it. Excel steps; Sheets opens,
+ // and opening is the reading that survives the round trip — Enter to edit,
+ // Enter again to commit and move on, so the key means the same thing in both
+ // halves of the gesture. Shift+Enter keeps its old meaning and is the
+ // vertical Shift+Tab; inside the editor the same chord is a line break,
+ // because that is the useful thing to mean in each place.
+ case 'Enter':      return e.shiftKey?T.mv(r-1,c):{edit:1};
  case 'Home':       return m?T.mv(0,0):T.mv(r,0);
  case 'End':        return m?null:T.edge(r,c,0,1,blo,bhi);
  case 'PageUp':     return T.mv(r-P,c);
