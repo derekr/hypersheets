@@ -16,16 +16,52 @@ import (
 // Both sides are pinned because both are load-bearing: the resize stops the
 // event, and the selection independently declines the same band.
 func TestTheGutterArbitratesItsThreeGestures(t *testing.T) {
-	for _, tc := range []struct{ name, expr string }{
-		{"drag", rzRowDownExpr},
-		{"fit", rzRowFitExpr("demo")},
-	} {
-		if !strings.Contains(tc.expr, "gripAt(evt)") {
-			t.Errorf("the row %s does not decide the hit through the shared test: %q", tc.name, tc.expr)
+	// THE GESTURE LIVES ON `#vp`, WHICH IS PAGE SHELL. On the gutter it sat
+	// inside `#g`, which every push re-renders — so a live drag was morphed
+	// underneath itself, and the element issuing the commit was one a push could
+	// replace, which aborts its in-flight request. Sharing `#vp`'s handlers
+	// leaves nothing to race and nothing to stop propagating.
+	page := pageShellWidths("demo", 0, 3, "", zeroAnchor(), nil, DefaultRows, "", nil)
+	for _, want := range []string{"rzDownR(evt)", "rzMoveR(evt.clientY)", "rzEndR(evt.clientY)", "fitR(rw)"} {
+		if !strings.Contains(page, want) {
+			t.Errorf("the row gesture is not on the page shell: %q is missing", want)
 		}
-		if !strings.Contains(tc.expr, "evt.stopPropagation()") {
-			t.Errorf("the row %s lets the gesture reach the viewport as well: %q", tc.name, tc.expr)
+	}
+	grid := renderWindow(blankCells(0, 3), 0, 3, "demo", selRange{})
+	for _, bad := range []string{"rzDownR", "rzEndR", "fitR(", "/rowheight"} {
+		if strings.Contains(grid, bad) {
+			t.Errorf("the row gesture is back on markup a push replaces: %q", bad)
 		}
+	}
+
+	// Resizing is asked first and answers for itself, which is what gives the
+	// selection its turn on every other pixel.
+	down := vpPointerDownExpr
+	if i, j := strings.Index(down, "rzDownR"), strings.Index(down, "selDown"); i < 0 || j < 0 || i > j {
+		t.Errorf("the selection is consulted before the resize: %q", down)
+	}
+
+	// THE RELEASE IS ON THE WINDOW, and that is the half that made the bug
+	// user-visible rather than merely fragile. On `#rn` the drag ended only if
+	// the pointer was still over a 56px-wide gutter, so drifting sideways — which
+	// is what a hand does over 60px of vertical travel — lost the release. The
+	// gesture then stayed live with its anchor frozen at the original press, and
+	// the NEXT unrelated click anywhere committed a height computed from that
+	// stale anchor: reliably MinRowHeight. Two of those reached production and
+	// are in the log as `rowheight height=16`.
+	if !strings.Contains(page, `data-on:pointerup__window="`+rowResizeUpExpr("demo")) {
+		t.Error("the resize does not end on the window, so a drag that drifts off the gutter never ends")
+	}
+
+	// The grip straddles the edge it draws. A band reaching only upwards leaves
+	// half the pixels around the visible line inside the row below, where the
+	// same press means "select this row" — which is how aiming at a boundary
+	// produced a nine-row selection.
+	js2 := anchorScript()
+	i2 := strings.Index(js2, "T.gripAt=function")
+	grip := js2[i2 : i2+strings.Index(js2[i2:], "\nvar ")]
+	if !strings.Contains(grip, "q.bottom-GRIP") || !strings.Contains(grip, "q.top+GRIP") {
+		t.Errorf("the grip does not straddle the row edge: %s", grip)
 	}
 
 	// And the selection's own hit test declines the grip band, which is the row

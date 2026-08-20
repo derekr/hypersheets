@@ -46,7 +46,7 @@ func TestFitReleasesTheRowHeightBeforeMeasuringIt(t *testing.T) {
 // measures, and what it sends is an ordinary number through the ordinary
 // command, so a fitted row and a dragged one are the same fact afterwards.
 func TestFittingCommitsThroughTheResizeCommand(t *testing.T) {
-	fit := rzRowFitExpr("demo")
+	fit := rowFitExpr("demo")
 	if !strings.Contains(fit, "/s/demo/rowheight") {
 		t.Errorf("fit does not post to the resize endpoint: %q", fit)
 	}
@@ -57,9 +57,10 @@ func TestFittingCommitsThroughTheResizeCommand(t *testing.T) {
 	if !strings.Contains(fit, "requestCancellation:'disabled'") {
 		t.Errorf("a fit can be cancelled by the next one: %q", fit)
 	}
-	// It is on the gutter, on the same band as the drag.
-	page := renderWindow(blankCells(0, 3), 0, 3, "demo", selRange{})
-	if !strings.Contains(page, `data-on:dblclick="`) {
-		t.Error("the gutter has no fit gesture")
+	// It shares the viewport's double-click with the cell editor, and answers
+	// first — a double-click on the grip must not also open a cell.
+	dbl := vpDblClickExpr("demo")
+	if i, j := strings.Index(dbl, "fitR("), strings.Index(dbl, "$editing=true"); i < 0 || j < 0 || i > j {
+		t.Errorf("a double-click on the row grip also opens the editor: %q", dbl)
 	}
 }

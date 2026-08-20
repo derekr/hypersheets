@@ -313,7 +313,7 @@ func editorBlurExpr(sheetID string) string {
 //
 // It ignores a pointerdown on the editor itself, which bubbles here because the
 // editor is rendered inside `#g` inside `#vp`.
-const vpPointerDownExpr = `const t=evt.target;` +
+const vpPointerDownExpr = rowResizeDownExpr + `const t=evt.target;` +
 	`if($editing&&!(t&&t.id==='` + editorID + `')){$editing=false;` +
 	`window.dispatchEvent(new Event('` + commitEvent + `'))}` +
 	`if(!window.__ss)return;const d=window.__ss.selDown(evt);if(!d)return;` +
@@ -334,14 +334,17 @@ const vpPointerDownExpr = `const t=evt.target;` +
 // the mouse passing through, so the first thing it does is a null test on a
 // property. T.selMove returns null unless a drag is live and the pointer has
 // reached a different cell, so a drag across one cell writes signals once.
-const vpPointerMoveExpr = `const m=window.__ss&&window.__ss.selMove(evt);` +
+const vpPointerMoveExpr = `if(window.__ss&&window.__ss.rzMoveR(evt.clientY))return;` +
+	`const m=window.__ss&&window.__ss.selMove(evt);` +
 	`if(m){$_sfr=m.r;$_sfc=m.c}`
 
 // vpPointerUpExpr ends the drag. It is on the window, not on `#vp`: a drag that
 // leaves the grid and is released over the toolbar must still end, and a drag
 // state that outlives its own gesture would turn the next idle mouse movement
 // into a selection.
-const vpPointerUpExpr = `if(window.__ss)window.__ss.selUp()`
+func vpPointerUpExpr(sheetID string) string {
+	return rowResizeUpExpr(sheetID) + `if(window.__ss)window.__ss.selUp()`
+}
 
 // ─── Selection and navigation, on `#vp` ───────────────────────────────────────
 
@@ -490,7 +493,11 @@ const vpClickExpr = `if(window.__ss&&window.__ss.selTook())return;` +
 // vpDblClickExpr enters edit mode preserving the content, the same door F2
 // opens. The click that preceded it has already selected the cell; an empty
 // cell opens an empty editor.
-const vpDblClickExpr = `const h=window.__ss&&window.__ss.hit(evt);if(!h)return;evt.preventDefault();` +
+func vpDblClickExpr(sheetID string) string {
+	return rowFitExpr(sheetID) + vpDblClickEditExpr
+}
+
+const vpDblClickEditExpr = `const h=window.__ss&&window.__ss.hit(evt);if(!h)return;evt.preventDefault();` +
 	`const s=window.__ss.rawOf(h.ref);$raw=s;$editing=true;window.__ss.edit(s)`
 
 // ─── The client half ──────────────────────────────────────────────────────────

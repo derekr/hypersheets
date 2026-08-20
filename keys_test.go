@@ -415,7 +415,7 @@ func TestClickSelectsAndDoesNotEdit(t *testing.T) {
 	if strings.Contains(vpClickExpr, "$raw") {
 		t.Error("a click still overwrites the edit buffer")
 	}
-	if !strings.Contains(vpDblClickExpr, "$editing=true") {
+	if !strings.Contains(vpDblClickExpr("demo"), "$editing=true") {
 		t.Error("a double-click no longer edits")
 	}
 }

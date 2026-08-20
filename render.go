@@ -251,11 +251,7 @@ func renderWindow(cells []Cell, loRow, hiRow int, sheetID string, sel selRange) 
 	// re-rendering the grid to change one integer. It lives on `#vp` instead, as
 	// an inherited custom property patched by one signal, exactly like the 26
 	// column widths. See pageShellWidths and patchExtent.
-	b.WriteString(`<div id="` + gridID + `"><div id="` + gutterID + `" data-on:pointerdown="` +
-		rzRowDownExpr + `" data-on:pointermove="` + rzRowMoveExpr +
-		`" data-on:pointerup="` + rzRowUpExpr(sheetID) +
-		`" data-on:pointercancel="` + rzRowCancelExpr +
-		`" data-on:dblclick="` + rzRowFitExpr(sheetID) + `">`)
+	b.WriteString(`<div id="` + gridID + `"><div id="` + gutterID + `">`)
 	writeRowNums(&b, loRow, nRows)
 	b.WriteString(`</div><div id="` + bufferID + `">`)
 	writeColRules(&b)
@@ -286,11 +282,7 @@ func renderWindowParts(cells []Cell, loRow, hiRow int, sheetID string) (head, ta
 
 	var h strings.Builder
 	h.Grow(nRows*36 + 512)
-	h.WriteString(`<div id="` + gridID + `"><div id="` + gutterID + `" data-on:pointerdown="` +
-		rzRowDownExpr + `" data-on:pointermove="` + rzRowMoveExpr +
-		`" data-on:pointerup="` + rzRowUpExpr(sheetID) +
-		`" data-on:pointercancel="` + rzRowCancelExpr +
-		`" data-on:dblclick="` + rzRowFitExpr(sheetID) + `">`)
+	h.WriteString(`<div id="` + gridID + `"><div id="` + gutterID + `">`)
 	writeRowNums(&h, loRow, nRows)
 	h.WriteString(`</div><div id="` + bufferID + `">`)
 	writeColRules(&h)
@@ -1193,7 +1185,9 @@ header .tb .fs{height:24px;max-width:7.5rem;border:1px solid #dadce0;border-radi
 #` + gutterID + `{position:sticky;left:0;z-index:1;display:block;width:var(--hw);height:100%;background-color:var(--hd);box-shadow:inset -1px 0 0 var(--ln2);user-select:none}
 #` + gutterID + `>b{position:absolute;left:0;top:var(--t,calc(var(--r) * var(--rh)));width:var(--hw);height:var(--hr,var(--rh));line-height:calc(var(--rh) - 1px);color:#444746;font-weight:400;font-size:11px;text-align:center;border-bottom:1px solid var(--ln)}
 #` + gutterID + `>b.a{background:#d3e3fd;color:#0b57d0}
-#` + gutterID + `>b::after{content:"";position:absolute;left:0;right:0;bottom:0;height:` + strconv.Itoa(rowGripPx) + `px;cursor:row-resize}
+#` + gutterID + `>b::after,#` + gutterID + `>b::before{content:"";position:absolute;left:0;right:0;height:` + strconv.Itoa(rowGripPx) + `px;cursor:row-resize}
+#` + gutterID + `>b::after{bottom:0}
+#` + gutterID + `>b::before{top:0}
 #` + bufferID + `{position:absolute;top:0;left:0;width:var(--tw);height:100%;display:grid;grid-template-columns:` + gridTracks() + `;grid-template-rows:100%;user-select:none}
 #` + bufferID + `>i.` + stripClass + `{position:absolute;left:0;right:0;top:var(--t,calc(var(--r) * var(--rh)));height:var(--hr,var(--rh));border-bottom:1px solid var(--ln);pointer-events:none}
 #` + bufferID + `>i{grid-row:1;box-shadow:inset -1px 0 0 var(--ln);pointer-events:none}
@@ -1219,7 +1213,7 @@ header .tb .fs{height:24px;max-width:7.5rem;border:1px solid #dadce0;border-radi
 #` + cellOverlayID + `>*,#` + boxOverlayID + `>*,#pc>div{position:absolute;left:0;right:1px;top:var(--t,calc(var(--r) * var(--rh)))}
 #` + selBoxID + `{height:calc(var(--sh,calc(var(--n) * var(--rh))) - 1px);background:rgba(26,115,232,.14);box-shadow:inset 0 0 0 1px rgba(26,115,232,.45)}
 #` + copyBoxID + `{height:calc(var(--sh,calc(var(--n) * var(--rh))) - 1px);outline:2px dashed var(--bl);outline-offset:-2px}
-#` + editorID + `{left:-1px;right:auto;width:calc(100% + 2px);top:calc(var(--t,calc(var(--r) * var(--rh))) - 1px);z-index:4;height:calc(var(--hr,var(--rh)) + 2px);margin:0;padding:0 3px;border:2px solid var(--bl);border-radius:0;background:#fff;color:#202124;font:13px/` + strconv.Itoa(rowHeightPx-1) + `px Arial,Helvetica,sans-serif;text-align:right;outline:none;box-shadow:0 1px 3px rgba(60,64,67,.3);pointer-events:auto;user-select:text;resize:none;overflow:auto;white-space:pre}
+#` + editorID + `{left:-1px;right:auto;width:calc(100% + 2px);top:calc(var(--t,calc(var(--r) * var(--rh))) - 1px);z-index:4;field-sizing:content;height:auto;min-height:calc(var(--hr,var(--rh)) + 2px);max-height:` + strconv.Itoa(MaxRowHeight) + `px;margin:0;padding:0 3px;border:2px solid var(--bl);border-radius:0;background:#fff;color:#202124;font:13px/` + strconv.Itoa(rowHeightPx-1) + `px Arial,Helvetica,sans-serif;text-align:right;outline:none;box-shadow:0 1px 3px rgba(60,64,67,.3);pointer-events:auto;user-select:text;resize:none;overflow:auto;white-space:pre}
 #` + activeCellID + `{left:-1px;right:auto;width:calc(100% + 2px);top:calc(var(--t,calc(var(--r) * var(--rh))) - 1px);z-index:3;height:calc(var(--hr,var(--rh)) + 2px);border:2px solid var(--bl)}
 #mn{position:fixed;z-index:9;min-width:11rem;padding:6px 0;border:1px solid #dadce0;border-radius:4px;background:#fff;box-shadow:0 2px 6px 2px rgba(60,64,67,.15);font-size:13px}
 #mn button{display:block;width:100%;padding:7px 14px;border:0;background:none;color:#202124;font:13px/1 Arial,Helvetica,sans-serif;text-align:left;cursor:pointer}
@@ -1383,57 +1377,48 @@ const rzDownExpr = `const t=evt.target;if(t.tagName!=='I')return;evt.preventDefa
 	`if(window.__ss)window.__ss.rzStart(+s.dataset.c,evt.clientX,s.offsetWidth);` +
 	`el.setPointerCapture(evt.pointerId)`
 
-// The row drag. It hangs off the gutter rather than a grip element per row: the
-// gutter already emits one number per buffered row, and adding a handle to each
-// would double that for a target the reader can only be on one of at a time. The
-// hit is decided by where in the row the pointer went down — the bottom few
-// pixels — and `#rn>b::after` gives that band its cursor without being an
-// element of its own.
-var rzRowDownExpr = `if(!window.__ss)return;const rw=window.__ss.gripAt(evt);if(rw<0)return;` +
-	// The gesture is claimed here, not merely started. `#rn` is inside `#vp`, so
-	// without this the same pointerdown also reaches vpPointerDownExpr and drags
-	// a row selection along behind the resize — which is what the user sees,
-	// because the selection repaints on every row crossed and the resize does
-	// not repaint until it commits.
-	`evt.preventDefault();evt.stopPropagation();` +
-	`window.__ss.rzStartR(rw,evt.clientY,evt.target.getBoundingClientRect().height);` +
-	`el.setPointerCapture(evt.pointerId)`
-
-const rzRowMoveExpr = `if(window.__ss)window.__ss.rzMoveR(evt.clientY)`
-
-// rzRowUpExpr commits. It posts from the gutter, which is page-shell markup no
-// push replaces, and opts out of cancellation for the reason every other write
-// does: two resizes are two operations.
+// THE ROW GESTURE LIVES ON `#vp`, WHICH IS PAGE SHELL. It began on the gutter,
+// which reads better and is wrong twice over: `#rn` is inside `#g`, and `#g` is
+// what every push re-renders. So the element holding a live drag is morphed
+// underneath it — and, the sharper half, the element issuing the commit is one a
+// push can replace, which aborts its in-flight request. A resize that lands
+// while anyone else is typing is dropped, with nothing in the log to say so.
+// That is this codebase's oldest Datastar hazard, the one the editor is shaped
+// around, and this walked straight into it.
 //
-// Unlike the column drag it writes no optimistic value. A row's geometry lives
-// in the stylesheet the server derives per window, so showing the new height
+// On `#vp` there is no second element to race and nothing to stop propagating:
+// one handler decides between resizing and selecting, in that order, and the
+// release is already on the window so a drag that ends anywhere still ends.
+//
+// It writes no optimistic height, unlike the column drag. A row's geometry lives
+// in the stylesheet the server derives per window, so painting the new height
 // before the server answers would mean the client generating that stylesheet
 // too — two sources for one set of rules. The guide line is the feedback during
 // the gesture; the row moves when the push lands.
-func rzRowUpExpr(sheetID string) string {
-	return `if(!window.__ss)return;const v=window.__ss.rzEndR(evt.clientY);if(!v)return;` +
+const rowResizeDownExpr = `if(window.__ss&&window.__ss.rzDownR(evt))return;`
+
+func rowResizeUpExpr(sheetID string) string {
+	return `if(window.__ss){const v=window.__ss.rzEndR(evt.clientY);if(v){` +
 		`$rr=v.r;$rh=v.h;` +
-		`@post('/s/` + sheetID + `/rowheight',{requestCancellation:'disabled'})`
+		`@post('/s/` + sheetID + `/rowheight',{requestCancellation:'disabled'})}}`
 }
 
-const rzRowCancelExpr = `if(window.__ss)window.__ss.rzCancelR()`
-
-// Fit to contents, on the same five pixels the drag uses and by the same
-// convention every spreadsheet has: double-click the edge. It commits through
-// the resize endpoint because a fitted height is a height — the store has no
-// notion of "automatic", so a row that has been fitted stays where it was put
-// until something fits it again.
-func rzRowFitExpr(sheetID string) string {
-	return `if(!window.__ss)return;const rw=window.__ss.gripAt(evt);if(rw<0)return;` +
-		// Claimed for the same reason the drag is, against a different neighbour:
-		// `#vp` opens the cell editor on a double-click.
-		`evt.preventDefault();evt.stopPropagation();` +
+// Fit to contents, on the same band the drag uses and by the convention every
+// spreadsheet has: double-click the edge. It commits through the resize endpoint
+// because a fitted height is a height — the store has no notion of "automatic",
+// so a fitted row stays where it was put until something fits it again.
+func rowFitExpr(sheetID string) string {
+	return `if(window.__ss){const rw=window.__ss.gripAt(evt);if(rw>=0){evt.preventDefault();` +
 		`$rr=rw;$rh=window.__ss.fitR(rw);` +
-		`@post('/s/` + sheetID + `/rowheight',{requestCancellation:'disabled'})`
+		`@post('/s/` + sheetID + `/rowheight',{requestCancellation:'disabled'});return}}`
 }
 
-// rowGripPx is how tall the resize band at the bottom of a row number is.
-const rowGripPx = 5
+// rowGripPx is the reach of the resize band on EACH side of a row's bottom edge.
+// Straddling it is the difference between a target you aim at and one you hit:
+// the edge is what the eye sees, and a band reaching only upwards leaves half the
+// pixels around that line belonging to the row below — where the same press
+// means "select this row" instead.
+const rowGripPx = 4
 
 // rzMoveExpr writes no signal. It moves one element's transform, which is what
 // keeps the drag cheap on a dense buffer.
@@ -1847,12 +1832,12 @@ func pageShellWidths(sheetID string, loRow, hiRow int, grid string, at anchor, w
 	b.WriteString(`" data-on:pointermove="`)
 	b.WriteString(vpPointerMoveExpr)
 	b.WriteString(`" data-on:pointerup__window="`)
-	b.WriteString(vpPointerUpExpr)
+	b.WriteString(vpPointerUpExpr(sheetID))
 	b.WriteString(`" data-on:click="`)
 	b.WriteString(vpClickExpr)
 	// A double-click edits, preserving the content — the mouse's F2.
 	b.WriteString(`" data-on:dblclick="`)
-	b.WriteString(vpDblClickExpr)
+	b.WriteString(vpDblClickExpr(sheetID))
 	// The keyboard is one attribute on one element, and it listens on the window
 	// rather than on a focused grid: after any blur the keyboard belongs to
 	// `<body>`, so a grid-scoped listener would discard every keystroke after a
@@ -2323,13 +2308,27 @@ T.rzCancel=function(){rzC=-1;T.gdHide();};
 // only be on one of at a time.
 T.gripAt=function(e){var t=e.target;
  if(!t||t.tagName!=='B'||!t.parentElement||t.parentElement.id!=='` + gutterID + `')return -1;
- var q=t.getBoundingClientRect();
- if(e.clientY<q.bottom-GRIP)return -1;
- return +t.style.getPropertyValue('--r');};
+ var q=t.getBoundingClientRect(),r=+t.style.getPropertyValue('--r');
+ if(e.clientY>=q.bottom-GRIP)return r;
+ // The other half of the same edge. Pressing just BELOW a boundary is aiming at
+ // that boundary, and the boundary belongs to the row above it.
+ if(e.clientY<=q.top+GRIP&&r>0)return r-1;
+ return -1;};
+// These report whether they took the gesture, because they share one handler
+// with the selection rather than sitting on an element of their own. Saying "not
+// mine" is how the selection gets its turn.
+//
+// The starting height comes from the geometry the client already has, not from
+// the element under the pointer: the grip may belong to the row ABOVE the one
+// that was pressed, and measuring the wrong box is a resize that jumps on the
+// first pixel of movement.
 var rzYy=0,rzHh=0,rzR=-1;
-T.rzStartR=function(r,y,h){rzR=r;rzYy=y;rzHh=h;T.gdShow('y',y);};
+T.rzDownR=function(e){if(e.button!==0)return false;
+ var r=T.gripAt(e);if(r<0)return false;
+ e.preventDefault();rzR=r;rzYy=e.clientY;rzHh=T.hOf(r);T.gdShow('y',e.clientY);
+ return true;};
 T.rzAtR=function(y){var v=rzHh+(y-rzYy);return v<MINH?MINH:(v>MAXH?MAXH:v);};
-T.rzMoveR=function(y){if(rzR<0)return;T.gdMove(rzYy+(T.rzAtR(y)-rzHh));};
+T.rzMoveR=function(y){if(rzR<0)return false;T.gdMove(rzYy+(T.rzAtR(y)-rzHh));return true;};
 T.rzEndR=function(y){if(rzR<0)return null;var r=rzR,h=T.rzAtR(y);
  rzR=-1;T.gdHide();return h===rzHh?null:{r:r,h:h};};
 // The one layout fact the client originates. The server has no font metrics, so
@@ -2354,7 +2353,6 @@ T.fitR=function(r){var d='--r:'+r,h=0,i,
  for(i=0;i<q.length;i++)q[i].classList.remove('` + measureClass + `');
  h=h?h+1:RH;
  return h<MINH?MINH:(h>MAXH?MAXH:h);};
-T.rzCancelR=function(){rzR=-1;T.gdHide();};
 T.rzLive=function(){return rzC;};
 T.anchorRow=+((vp&&vp.dataset.ar)||0);
 if(T.anchorRow>0)T.seek(T.anchorRow);
