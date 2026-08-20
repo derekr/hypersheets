@@ -158,6 +158,44 @@ near-zero demand; do not.
 Sheets caps **10 million cells per document** — a resource limit that actually
 corresponds to memory, recalc time and payload. That is the limit worth enforcing.
 
+## Vim-style navigation — three shapes, one conflict (PARKED 2026-08-20)
+
+**The conflict, stated once**: in a grid, a plain letter types into the cell. That is
+the single most-used interaction in the whole app, and `h`/`j`/`k`/`l` are letters. So
+vim motions are not a keymap addition — they need somewhere to *be*, and choosing
+where is the whole design.
+
+This is the same problem as the row grip and the row selection sharing five pixels,
+one level up: two modalities want the same input, and the fix is to make the
+arbitration explicit rather than to guess. `gripAt` is the pointer's version.
+
+**A. Modal.** A normal/insert distinction with the mode in the header. Normal owns
+the letters (`hjkl`, `w`/`b` over used cells, `0`/`$`, `gg`/`G`, `i`/`a`/`cc`/`x`,
+`v`/`V`), insert is the editor as it stands, `Esc` returns. The only shape where the
+motions are actually vim.
+
+- *Cost*: one client signal for the mode, and `T.key` splits into two tables. The
+  keymap is already one function, so it is contained. The mode indicator is a header
+  chip on the terms the latency chip is on.
+- *Risk*: it changes what typing means for everyone, including people who have never
+  used vim. Wants to be opt-in — a toggle, remembered per viewer, defaulting off.
+- *Open question*: whether the mode is per-viewer local state or something the
+  presence layer shows other people. Local, almost certainly: it is a property of the
+  person, not of the sheet.
+
+**B. Non-modal, behind a leader.** Letters keep typing; motions live behind a leader
+that arms for one command (`Space j`, `Space g g`). Nothing existing changes meaning
+and there is no mode to get stuck in. It also never feels like vim, which may make it
+the worst of both — worth deciding on rather than defaulting into.
+
+**C. A command line only.** No motions. `:` opens a bar: `:42`, `:C7`, `:A1:D20`,
+`:w 200`, `:fit`, `:sort A`. One input, one parser, no key changes meaning.
+
+**C is the piece a grid genuinely lacks** — a way to say where you want to be —
+and it is independent of A and B rather than a lesser version of them. It could ship
+first under any of the three, and it composes with the existing anchor (`?at=`) and
+`ParseRef` rather than adding a coordinate system.
+
 ## Smaller items
 
 - **System-clipboard TSV paste** (paste from Excel/Sheets). Skipped as a stretch during
