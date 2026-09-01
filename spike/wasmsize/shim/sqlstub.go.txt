@@ -1,0 +1,183 @@
+// A database/sql driver registered under the name "sqlite", so that
+// sql.Open("sqlite", dsn) — store.go:573, the only such call in the repo —
+// links and returns a handle without modernc.org/sqlite, which does not build
+// for GOOS=js or GOOS=wasip1.
+//
+// Nothing here executes SQL. It exists for two reasons:
+//
+//  1. it makes the wasm size measurement possible at all, and
+//  2. writing it enumerates the seam. Every interface below is one this
+//     codebase's use of database/sql actually reaches, and the comment on each
+//     says which call site reaches it. That list is the answer to "what would a
+//     real sqlite-wasm driver have to implement?" — see SPIKE-WASM-STANDIN.md.
+//
+// The measured surface (non-test code): tx.Exec x69, rows.Close x49,
+// rows.Scan x41, rows.Next x41, rows.Err x33, db.Exec x30, db.QueryRow x21,
+// db.Query x21, tx.Rollback x15, db.Begin x14, tx.QueryRow x12, tx.Query x12,
+// tx.Commit x7, tx.Prepare x5, db.Prepare x1. There is not one *Context call in
+// the repo, but database/sql still prefers the Context forms of the driver
+// interfaces when a driver offers them, which is why they are here.
+
+package main
+
+import (
+	"context"
+	"database/sql"
+	"database/sql/driver"
+	"errors"
+	"io"
+)
+
+func init() { sql.Register("sqlite", swStubDriver{}) }
+
+var errSwStub = errors.New("standin: stub sqlite driver — size measurement only, no SQL is executed")
+
+// --- driver.Driver / driver.DriverContext ------------------------------------
+//
+// openSheetFile builds a DSN carrying four pragmas —
+// journal_mode(WAL), synchronous(NORMAL), busy_timeout(5000),
+// foreign_keys(off) — and modernc.org/sqlite parses them out of the DSN and
+// applies them per pooled connection. A replacement driver owns that parsing;
+// database/sql passes the DSN through untouched.
+
+type swStubDriver struct{}
+
+var (
+	_ driver.Driver        = swStubDriver{}
+	_ driver.DriverContext = swStubDriver{}
+)
+
+func (d swStubDriver) Open(string) (driver.Conn, error) { return &swStubConn{}, nil }
+
+func (d swStubDriver) OpenConnector(dsn string) (driver.Connector, error) {
+	return swStubConnector{dsn: dsn, drv: d}, nil
+}
+
+type swStubConnector struct {
+	dsn string
+	drv swStubDriver
+}
+
+func (c swStubConnector) Connect(context.Context) (driver.Conn, error) { return &swStubConn{}, nil }
+func (c swStubConnector) Driver() driver.Driver                        { return c.drv }
+
+// --- driver.Conn --------------------------------------------------------------
+//
+// db.SetMaxOpenConns(8) / SetMaxIdleConns(4) means database/sql may hold eight
+// live driver.Conns per sheet. Under a single-file sqlite-wasm build that is
+// eight handles onto one database, so the driver has to decide whether it is
+// really connection-per-handle or one shared handle behind a mutex.
+
+type swStubConn struct{}
+
+var (
+	_ driver.Conn               = (*swStubConn)(nil)
+	_ driver.ConnPrepareContext = (*swStubConn)(nil)
+	_ driver.ConnBeginTx        = (*swStubConn)(nil)
+	_ driver.ExecerContext      = (*swStubConn)(nil)
+	_ driver.QueryerContext     = (*swStubConn)(nil)
+	_ driver.Pinger             = (*swStubConn)(nil)
+	_ driver.SessionResetter    = (*swStubConn)(nil)
+	_ driver.Validator          = (*swStubConn)(nil)
+)
+
+func (c *swStubConn) Prepare(string) (driver.Stmt, error) { return &swStubStmt{}, nil }
+func (c *swStubConn) Close() error                        { return nil }
+
+// Begin: db.Begin() x14 in non-test code. database/sql routes it through
+// ConnBeginTx with a zero driver.TxOptions when the driver offers one.
+func (c *swStubConn) Begin() (driver.Tx, error) { return swStubTx{}, nil }
+
+func (c *swStubConn) PrepareContext(context.Context, string) (driver.Stmt, error) {
+	return &swStubStmt{}, nil
+}
+
+func (c *swStubConn) BeginTx(context.Context, driver.TxOptions) (driver.Tx, error) {
+	return swStubTx{}, nil
+}
+
+// ExecerContext / QueryerContext are optional, but without them database/sql
+// prepares and closes a statement for every one of the ~150 one-shot Exec and
+// Query calls in the store. On a per-keystroke write path that is the
+// difference between one round trip into the wasm module and three.
+func (c *swStubConn) ExecContext(context.Context, string, []driver.NamedValue) (driver.Result, error) {
+	return swStubResult{}, errSwStub
+}
+
+func (c *swStubConn) QueryContext(context.Context, string, []driver.NamedValue) (driver.Rows, error) {
+	return &swStubRows{}, errSwStub
+}
+
+func (c *swStubConn) Ping(context.Context) error         { return nil }
+func (c *swStubConn) ResetSession(context.Context) error { return nil }
+func (c *swStubConn) IsValid() bool                      { return true }
+
+// --- driver.Stmt --------------------------------------------------------------
+//
+// Two prepared statements are cached for the life of a sheet (sh.depLo,
+// sh.depHi in openSheetFile) and tx.Prepare is used five more times for bulk
+// paths. Everything else is one-shot.
+
+type swStubStmt struct{}
+
+var (
+	_ driver.Stmt             = (*swStubStmt)(nil)
+	_ driver.StmtExecContext  = (*swStubStmt)(nil)
+	_ driver.StmtQueryContext = (*swStubStmt)(nil)
+)
+
+func (s *swStubStmt) Close() error  { return nil }
+func (s *swStubStmt) NumInput() int { return -1 }
+
+func (s *swStubStmt) Exec([]driver.Value) (driver.Result, error) {
+	return swStubResult{}, errSwStub
+}
+
+func (s *swStubStmt) Query([]driver.Value) (driver.Rows, error) {
+	return &swStubRows{}, errSwStub
+}
+
+func (s *swStubStmt) ExecContext(context.Context, []driver.NamedValue) (driver.Result, error) {
+	return swStubResult{}, errSwStub
+}
+
+func (s *swStubStmt) QueryContext(context.Context, []driver.NamedValue) (driver.Rows, error) {
+	return &swStubRows{}, errSwStub
+}
+
+// --- driver.Tx ----------------------------------------------------------------
+//
+// The write path is `tx := db.Begin(); defer tx.Rollback(); ...; tx.Commit()`,
+// and a rollback after a successful commit must be a no-op — the store relies
+// on that in every mutation. A driver must return driver.ErrTxDone (which
+// database/sql translates to sql.ErrTxDone and the code discards) rather than a
+// real error.
+
+type swStubTx struct{}
+
+var _ driver.Tx = swStubTx{}
+
+func (swStubTx) Commit() error   { return errSwStub }
+func (swStubTx) Rollback() error { return errSwStub }
+
+// --- driver.Rows / driver.Result ----------------------------------------------
+//
+// The read path is Query -> Next -> Scan -> Err -> Close, 41 sites. Scan
+// targets in this codebase are int64, string, []byte and sql.NullInt64, so the
+// driver.Value set the driver must produce is INTEGER, TEXT, BLOB and NULL —
+// no REAL and no time.Time.
+
+type swStubRows struct{}
+
+var _ driver.Rows = (*swStubRows)(nil)
+
+func (r *swStubRows) Columns() []string         { return nil }
+func (r *swStubRows) Close() error              { return nil }
+func (r *swStubRows) Next([]driver.Value) error { return io.EOF }
+
+type swStubResult struct{}
+
+var _ driver.Result = swStubResult{}
+
+func (swStubResult) LastInsertId() (int64, error) { return 0, errSwStub }
+func (swStubResult) RowsAffected() (int64, error) { return 0, errSwStub }

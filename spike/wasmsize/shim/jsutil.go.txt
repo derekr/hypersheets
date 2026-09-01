@@ -1,0 +1,107 @@
+//go:build js && wasm
+
+// Taken from ../sw-datastar-sync-archive/gosw/cmd/app/jsutil.go, with every
+// identifier prefixed `sw` so it cannot collide with a symbol copied out of the
+// repo root. The rules it encodes are gosw's, not this spike's: a js.FuncOf
+// callback runs on the JS event loop and must never block, so everything that
+// can block runs on a goroutine inside a Promise executor; and every js.Func
+// pins a Go closure until Release.
+
+package main
+
+import (
+	"errors"
+	"fmt"
+	"syscall/js"
+)
+
+var (
+	swGlobal     = js.Global()
+	swPromise    = swGlobal.Get("Promise")
+	swObject     = swGlobal.Get("Object")
+	swUint8Array = swGlobal.Get("Uint8Array")
+	swHeaders    = swGlobal.Get("Headers")
+	swResponse   = swGlobal.Get("Response")
+	swStream     = swGlobal.Get("ReadableStream")
+	swError      = swGlobal.Get("Error")
+	swString     = swGlobal.Get("String")
+)
+
+// swMakePromise runs fn on a fresh goroutine and returns a JS Promise settled
+// by it.
+func swMakePromise(fn func(resolve, reject func(v any))) js.Value {
+	executor := js.FuncOf(func(_ js.Value, args []js.Value) any {
+		resolveFn, rejectFn := args[0], args[1]
+		resolve := func(v any) { resolveFn.Invoke(v) }
+		reject := func(v any) { rejectFn.Invoke(v) }
+		go func() {
+			defer func() {
+				if r := recover(); r != nil {
+					reject(swError.New(fmt.Sprintf("go panic: %v", r)))
+				}
+			}()
+			fn(resolve, reject)
+		}()
+		return nil
+	})
+	// The executor is invoked synchronously by the Promise constructor, so it is
+	// safe (and necessary, to avoid a leak) to release it right after.
+	defer executor.Release()
+	return swPromise.New(executor)
+}
+
+// swAwait blocks the *calling goroutine* until the JS promise settles. Only
+// legal from a goroutine spawned by swMakePromise.
+func swAwait(p js.Value) (js.Value, error) {
+	type result struct {
+		val js.Value
+		err error
+	}
+	ch := make(chan result, 1)
+
+	onOK := js.FuncOf(func(_ js.Value, args []js.Value) any {
+		var v js.Value
+		if len(args) > 0 {
+			v = args[0]
+		}
+		ch <- result{val: v}
+		return nil
+	})
+	defer onOK.Release()
+
+	onErr := js.FuncOf(func(_ js.Value, args []js.Value) any {
+		msg := "unknown JS error"
+		if len(args) > 0 {
+			msg = swString.Invoke(args[0]).String()
+		}
+		ch <- result{err: errors.New(msg)}
+		return nil
+	})
+	defer onErr.Release()
+
+	p.Call("then", onOK).Call("catch", onErr)
+
+	r := <-ch
+	return r.val, r.err
+}
+
+// swToUint8Array copies a Go byte slice into a fresh JS Uint8Array.
+func swToUint8Array(b []byte) js.Value {
+	u8 := swUint8Array.New(len(b))
+	if len(b) > 0 {
+		js.CopyBytesToJS(u8, b)
+	}
+	return u8
+}
+
+// swBytesFromArrayBuffer copies a JS ArrayBuffer into a Go byte slice.
+func swBytesFromArrayBuffer(buf js.Value) []byte {
+	u8 := swUint8Array.New(buf)
+	n := u8.Get("length").Int()
+	if n == 0 {
+		return nil
+	}
+	b := make([]byte, n)
+	js.CopyBytesToGo(b, u8)
+	return b
+}

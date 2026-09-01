@@ -1,0 +1,99 @@
+//go:build js && wasm
+
+// The stand-in's entry point, following gosw's shape: build an http.Handler,
+// publish it to JS as a callable, and never return from main. Under GOOS=js
+// there is no net.Listen, so there is nothing to bind to; http.Handler never
+// needed a socket.
+//
+// This file is identical in every stage of the measurement. The only thing that
+// differs between stages is which files from the repo root are compiled in and
+// held reachable by zz_reach.go, so the deltas are attributable to those files.
+
+package main
+
+import (
+	"context"
+	"database/sql"
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"runtime"
+	"syscall/js"
+)
+
+// swKeep exists so the linker cannot discard the stage's reachability roots.
+//
+//go:noinline
+func swKeep(v any) { swSink = v }
+
+var swSink any
+
+func main() {
+	swKeep(swReach)
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /api/hello", func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprintf(w, "hello from Go %s as %s/%s\n", runtime.Version(), runtime.GOOS, runtime.GOARCH)
+	})
+	mux.HandleFunc("GET /api/info", func(w http.ResponseWriter, r *http.Request) {
+		// database/sql is part of the floor: the store seam is sql.Open, and a
+		// wasm build has to carry database/sql whatever driver sits under it.
+		db, err := sql.Open("sqlite", "file:standin?mode=memory")
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		defer db.Close()
+		body, _ := json.Marshal(map[string]any{
+			"goVersion": runtime.Version(),
+			"drivers":   sql.Drivers(),
+			"reach":     len(swReach),
+		})
+		w.Header().Set("Content-Type", "application/json")
+		w.Write(body)
+	})
+	mux.HandleFunc("GET /api/stream", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		f, ok := w.(http.Flusher)
+		if !ok {
+			http.Error(w, "streaming unsupported", http.StatusInternalServerError)
+			return
+		}
+		fmt.Fprint(w, "event: tick\ndata: {}\n\n")
+		f.Flush()
+	})
+
+	js.Global().Set("goHandle", js.FuncOf(func(_ js.Value, args []js.Value) any {
+		if len(args) == 0 {
+			return swPromise.Call("reject", swError.New("goHandle: expected a Request"))
+		}
+		return swHandleRequest(mux, args[0])
+	}))
+
+	// main must never return: when it does the Go runtime exits and every
+	// js.Func, goHandle included, becomes unusable.
+	select {}
+}
+
+func swHandleRequest(h http.Handler, jsReq js.Value) js.Value {
+	return swMakePromise(func(resolve, _ func(v any)) {
+		req, err := swToGoRequest(jsReq)
+		if err != nil {
+			resolve(swErrorResponse(http.StatusBadGateway, err))
+			return
+		}
+		if req.URL.Path == "/api/stream" {
+			swServeStreaming(h, req, resolve)
+			return
+		}
+		resolve(swServeBuffered(h, req))
+	})
+}
+
+func swServeStreaming(h http.Handler, req *http.Request, resolve func(v any)) {
+	ctx, cancel := context.WithCancel(req.Context())
+	defer cancel()
+	w := swNewStreamWriter(func(resp js.Value) { resolve(resp) }, cancel)
+	defer w.swClose()
+	h.ServeHTTP(w, req.WithContext(ctx))
+}
