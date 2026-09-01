@@ -427,3 +427,418 @@ same move the latency chip already makes, applied one level up.
    exe.dev's resolver caches — `domain add` failed for ~10 minutes after the record
    was already correct, then succeeded unchanged. Budget for that, do not debug it.
 5. Disk and bandwidth are non-issues at 2.8 MB of state and 51x compression.
+
+---
+
+## Offline is a COPY of the sheet, not a mode on it (EARMARKED 2026-09-01 — direction chosen, nothing built)
+
+"Does it work offline?" is the demo's most common objection, and it is four
+questions wearing one word: *will it survive my elevator*, *will I lose my work*,
+*can I read this on a plane*, *can I write on a plane and see the result*. The
+first three are already cheap. Only the fourth is architecture, and it gets two
+answers, both of which are refusals to build a sync engine:
+
+1. **Relocate the server** — the same Go, compiled to wasm, serving the same HTML
+   from a service worker. Offline becomes a deployment topology, not an
+   architecture.
+2. **Fork the sheet** — what you take offline is a *copy*, with its own id, its
+   own database and its own URL. Nothing merges by itself.
+
+The second is the load-bearing one, and it is what makes the first affordable.
+
+**This topology has already been built twice in the neighbouring trees, and most
+of what follows is their measurements rather than this project's reasoning.** See
+`../hypermedia-sw-demo/` (the live TypeScript demo: service worker is the HTTP
+server, SQLite replica in a SharedWorker, syncular for the protocol) and
+`../sw-datastar-sync-archive/` (fourteen spikes with the numbers behind each
+decision, including `gosw/`, which is this exact idea in Go). Read those before
+re-deriving anything below. **What is genuinely open here is not the topology —
+it is whether the *sheet* domain fits inside it**, and that is a size question and
+a fan-out question, both stated in Phase 0.
+
+**The borrowed frame is [Monzo Stand-in](https://monzo.com/blog/tolerating-full-cloud-outages-with-monzo-stand-in).**
+Four ideas from it, all of which apply:
+
+- The backup is a **deliberately smaller system**, not a replica. Card payments,
+  balance, freeze. Not mortgages. "A backup of last resort, not our primary
+  mechanism of providing a reliable service."
+- The **primary stays the system of record** throughout.
+- **Failover is triggered by a human**, not by a heuristic. An engineer runs a CLI
+  tool. Nothing decides on its own that the world has ended.
+- Degradation is **intentional and visible**: the app shows a simplified UI and
+  says which one you are in.
+
+**Where the analogy inverts, and why that makes it cheaper here.** Monzo runs
+*different software* on purpose — outages are bugs, so independence is the whole
+point, and they pay for it by implementing payments twice. The failure being
+tolerated here is the **network**, which is not correlated with our code at all.
+So the stand-in runs the *same* Go, and the client does not change by one line.
+That inversion is the reason this is affordable, and it is the claim worth making
+out loud: a thick client cannot say it, because its offline story is a second
+implementation that has to agree with the first.
+
+### Why a copy, and not an outbox
+
+An outbox shows you something that **claims to be the sheet and is not**. Everyone
+who has used a sync engine has had the moment where the screen and the server
+disagreed and nothing said so. A copy cannot lie about that, because it never
+claimed to be the same sheet: different id, different URL, different chrome.
+
+That is "refusals are loud" (ARCHITECTURE.md) applied to **identity** rather than
+to commands, and it is the same move the latency chip already makes — put the
+uncomfortable fact on screen instead of hiding it.
+
+**So the two failures get two mechanisms, on purpose:**
+
+| what happened | mechanism | forks? |
+| --- | --- | --- |
+| lift, tunnel, wifi blip | reconnect. Absolute-state push means the reconnect path *is* the normal path run once. | **no** |
+| a flight, a remote site, a laptop going in a bag | **you press "take a copy offline"** while still online, the way you download an episode before boarding | **yes, deliberately** |
+
+**Nothing ever forks automatically.** A wifi blip that silently forked your sheet
+would be the worst outcome available, and it is exactly what "seamless offline"
+produces. Monzo's failover is a person running a command; so is this.
+
+**What that deletes, entirely:** the outbox, correlation ids, idempotency keys,
+version conflicts, replay-time refusals, and scope authz. The stand-in stops being
+"the server plus a reconciliation protocol" and becomes **the server, one user, a
+fresh database** — the smallest possible version of the Monzo move.
+
+### Merging: the shipping answer is copy and paste, and that is not a cop-out
+
+`rangeops.go` already implements copy, paste and fill over a selection. If
+merging means *open both sheets, select a range in the copy, paste it into the
+live one*, then *the merge tool is already built*, the person applies full
+judgment, and this ships with **zero new code**.
+
+It is also what people actually do with spreadsheets. Ship that first and say so
+— and the spike below strengthens the case, because auto-merge turned out to be
+operational transform rather than the join this entry originally assumed.
+
+### If auto-merge is ever wanted — MEASURED, and it is not a join
+
+**Spiked 2026-09-01 on `spike/fork-merge`; see `SPIKE-FORK-MERGE.md`.** Three
+claims went in, one came out intact. What follows is the corrected version; the
+original reasoning is in the spike document, including the part that was wrong.
+
+**A band key is NOT a row identity.** This was the load-bearing claim of the
+cheap version of this entry and it is false. `applyRowOp` calls `shiftKeyRange`
+over the band holding the insertion point, which is copy-to-scratch, delete, and
+**re-insert at new primary keys** (`mutate.go`); a rebalance re-keys the entire
+sheet through its rank map (`rekeyRowMeta`, `bandkey.go`). Measured on a 250x26
+seeded sheet with **zero cells edited**:
+
+| operation | rows whose key changed | spurious cells in a key-join 3-way diff |
+| --- | ---: | ---: |
+| `InsertRows(0,1)` | 50 of 253 | **1,442** |
+| `InsertRows(3,1)` | 47 of 253 | **1,379** |
+| `InsertRows(175,1)` | 25 of 253 | 627 |
+
+600 inserts at one rank: first band split at #51, **first full rebalance at #329**
+— after which every band key on that fork has moved at once. The band model buys
+a **cost bound** (1,035 cells rewritten, 2.5 ms), which is what `DATA-MODEL.md`
+actually claims. It does not buy identity, and there is no persistent row identity
+anywhere in the schema.
+
+**`ARCHITECTURE.md` invites this misreading and should be fixed.** *"A cell is
+stored under a band key, not a row number, so inserting a row renumbers nothing"*
+is true of display rank and false of storage keys, and the difference is exactly
+what a merge depends on.
+
+**The formula-reference exception does not exist either — for the opposite
+reason.** `Slot{Ref CellRef}` is the *parsed* form; storage is `ref0_k`, a band
+key, and `shiftKeyRange` ends with four indexed `UPDATE cells SET ref0_k =
+ref0_k + delta`. References move with their rows. `Z1 = "=A20*1"` tracked its
+landmark through every replay, transformed or not. What does not commute is the
+**arguments of the structural operations**, which is ordinary operational
+transform and has nothing to do with formulas.
+
+**But `Cell.Raw` IS a display coordinate**, materialized from template plus keys
+on every read — so the instinct was right about the wrong field. Diffing a
+transposed *snapshot* reported **508 phantom cells** (`U100: "=A99*2"` vs
+`"=A100*2"`). **Transpose diffs, never snapshots.**
+
+**What survived, and it is the whole of the cheapness.** Only raw text is merged;
+`.computed` is never read. Disjoint edits: 4 raw cells taken, 18 re-derived in
+1.4 ms, **0 cells different from applying the same edits in one order**. The good
+case works exactly as advertised — ours holds `Z10 = "=A10*3"` computing `837`,
+theirs sets `A10=500`, and the merge computes `1500`, cell-for-cell identical to
+linear. Merge inputs, re-derive outputs.
+
+### The rule, narrowed by measurement
+
+"Refuse all structural divergence" refuses a case that has a correct answer:
+insert/insert at distinct ranks merged **exactly** under an argument transform
+(2 cells taken, 0 conflicts, identical to linear) where the key join got **4,449
+cells wrong**. So:
+
+> 1. **Merge by rank, not by band key.** The key join is sound only when neither
+>    side has a structural event — and in that case rank and key agree anyway, so
+>    the key buys nothing and fails silently when it is wrong.
+> 2. **No structural event either side: auto-merge.** Diff raw text, take
+>    one-sided changes, report two-sided disagreement as a conflict, `ApplyBatch`,
+>    let `recalc.go` do the rest.
+> 3. **Structural events: replay with transformed arguments, do not refuse.**
+> 4. **Refuse only where the transform is partial** — a value edit landing on a
+>    row the other side deleted. Scenario (f) stranded `A6, B6`, and there is
+>    genuinely no linearization of "delete this row" and "put 42 in this row".
+>    That is the one case that has to be a question for a person.
+
+**The trap that makes "just replay it" worse than it looks:** replaying untransformed,
+`theirs-then-ours` was **accidentally correct** (0 cells off) while `ours-then-theirs`
+was 44 off. Right about half the time is the worst possible rate for a silent failure.
+
+**Two things that are cheap now and awkward later**, in priority order:
+
+- **A durable row identity.** One monotonic column on the `rows` side table, minted
+  once and carried by `shiftRowMeta` rather than derived from `k`. This is what the
+  refuted claim assumed already existed. `rows` is already keyed by `k` and already
+  moves with its cells, so it is one column and one migration now — and a retrofit
+  onto existing sheets later. Put a fork id in it and forks compose for free.
+  *(Band-key collision between forks is real and confirmed — both forks always mint
+  `k=3` for `InsertRows(3,1)`, because allocation is arithmetic over the band index,
+  not a counter. But a disjoint sub-space or fork-id tie-break solves the wrong
+  problem: the pre-existing rows move regardless.)*
+- **Record the fork point as `(base sheet copy, base seq)` at fork time.** The
+  in-memory `editLog` cannot supply a base at *any* depth — it is a field on
+  `Server` holding `[]CellRef`, which cells changed and not what they changed to,
+  and it does not survive a restart. The durable `events` table can, and it already
+  records structural ops as `ref="#rows" raw="insert 5 3"`, which is the divergence
+  detector rule 1 needs. But `events` is trimmed, so the base copy is still the
+  cheap answer: 208,896 bytes for a 250-row sheet, and forking is already a copy.
+
+**A fork is a file copy, but not of the file you think.** Sheets open
+`journal_mode(WAL)`, and after one committed edit on a seeded sheet the `.db` was
+4,096 bytes with 358,472 in the `-wal`. **Copying the `.db` alone silently produced
+a working, near-empty sheet** — it opened, migrated and rendered four used rows. Not
+corrupt, not an error, which is precisely the failure this codebase says is a bug in
+its own right. Use **`VACUUM INTO`**: 1.3 ms, 12 KB smaller than checkpoint-then-copy
+because it repacks, and it does not depend on the writer being idle — which on a live
+server is the whole correctness argument.
+
+### The merge UI is not new UI
+
+It is the grid, a style overlay and two buttons. The style cascade exists;
+conditional formatting is already in this backlog and is the same mechanism.
+Conflicts render as cell backgrounds, so **a merge review is itself a sheet** —
+which is a good thing for a spreadsheet to be able to say.
+
+### What the stand-in is, exactly
+
+**`sheet` + `view`, and nothing else** — the two domains ARCHITECTURE.md's graph
+already points *at*. A copy has one viewer, and much of this codebase exists
+because a sheet has more than one:
+
+| dropped | because |
+| --- | --- |
+| `bus` `registry` `presence` — the embedded NATS server | nobody to fan out to, and **measured elsewhere as unaffordable anyway**: `gosw-nats` got nats-server + JetStream *running* in a browser worker, at **5.0 MB brotli and 46–100 MB of non-reclaimable wasm memory**. Rejected there; rejected here. |
+| `limits` `reaper` `readonly` `headers` | open-internet policy for a shared demo. A local single user on their own copy is not a threat model. Nothing replays, so nothing arrives at the origin to be refused. |
+| `otel` export | nowhere to send it |
+
+**Deliberately not supported**, and the UI should say so rather than degrade
+quietly: multiplayer inside a copy (a fork is single-player by definition);
+forking a sheet you have never opened online — opening it is what seeds the copy,
+so a cold URL offline is an honest 404, not a spinner; the index page.
+
+### The topology, already decided and measured next door
+
+```
+browser tab  ──fetch──▶  service worker (HTTP)  ──port──▶  SharedWorker (data plane)
+                          routes, SSE streams                sheet domain + SQLite
+```
+
+`kanban-topology-spike` chose the **SharedWorker data plane** over both
+dedicated-Worker and service-worker-does-everything, and the number that decided
+it was **hung-tab staleness: 40 s → 6 ms**. Do not re-open that.
+
+**`gosw/` already proved the Go half.** A real `*http.ServeMux` compiled
+`GOOS=js GOARCH=wasm`, serving inside a service worker, with the origin's log
+showing **zero** `/api/*` requests for a whole session. Under `GOOS=js` there is
+no `net.Listen`, so the handler is published to JS as a callable rather than bound
+to a socket — fine, because `http.Handler` never needed a socket. SSE streams
+genuinely incrementally through a `ReadableStream` (measured at +503, +1006,
++1511, +2012, +2518 ms), so **the stream survives the move**; that was the thing
+most likely to be assumed impossible.
+
+### The idea worth keeping: the stand-in is a shadow, not a fallback
+
+Monzo's line is that both routes are "tested rigorously and continuously, in
+production". The version of that here is nearly free: **run the stand-in on every
+command while online too**, discard its answer, and compare it against what the
+origin pushed. Divergence becomes a number next to the latency chip.
+
+RESULTS.md keeps finding the same thing — **the costs that decide this design are
+data movement and round trips, not computation.** A second local evaluation of
+every edit spends the one resource that has repeatedly turned out not to matter,
+and it is the only thing that stops two evaluators drifting apart between the two
+days a year one of them is used. Build it second, not last.
+
+### Phase 0 — the questions the neighbouring trees do NOT answer
+
+Everything about the topology is settled next door. These are not, and they are in
+dependency order.
+
+**1. Does the fork/merge model hold? — DONE 2026-09-01, `SPIKE-FORK-MERGE.md`.**
+Answer: yes, but not for the reason claimed. Merging inputs and re-deriving is
+exact and costs 1.4 ms; matching rows by band key is not, and the refusal rule was
+too broad. See the two sections above. The remaining work this exposed is a durable
+row identity and a fork point recorded as `(base copy, base seq)` — both cheap now.
+
+**Still unmeasured on this axis, and named by the spike:** styles, column widths and
+row heights are invisible to a `Raw` diff (the row level of the style cascade is keyed
+by `k`, so it inherits the whole of finding 1); forking under a live writer; more than
+one structural op per side; merging across a rebalance; and scale — everything was
+250 rows, where the merge is a full `UsedRows` scan per side, so 10,000 rows is
+260,000 cells per snapshot and none of the timings above should be assumed to carry.
+
+**2. Size, and it is the gate on the wasm half.** `gosw` measured the real floor
+for a Go `net/http` handler in a service worker — and noted it **"barely moves
+with handler code"**, which is the encouraging half:
+
+| | |
+|---|---|
+| `gosw` app.wasm, Go 1.26.1, `-trimpath -ldflags="-s -w"` | **6.01 MB raw, 1.68 MB gzip** |
+| plus `wasm_exec.js` | 17 KB |
+| `../hypermedia-sw-demo` for comparison (TypeScript) | 774 KB data plane + 848 KB `sqlite3.wasm` |
+| **sheetstream first visit today** | **27.9 KB** |
+
+So ~1.7 MB gzip is the honest expectation, roughly **60x the entire page as it
+ships**. Survivable *only* as an explicit opt-in — and the fork model already
+makes it one, because "take a copy offline" is a button somebody presses. **The
+stand-in must never be on the first-paint path.** If it ever loads by default, the
+demo has spent its best number on a feature most visitors will not use.
+
+**3. `modernc.org/sqlite` does not build for wasm.** Measured 2026-09-01, go
+1.26.1, libc v1.74.4 — both targets fail identically:
+
+```
+GOOS=js GOARCH=wasm     -> modernc.org/libc/{errno,limits,pthread,signal,stdio,sys/types}:
+GOOS=wasip1 GOARCH=wasm    build constraints exclude all Go files
+```
+
+**The seam for the fix is one line.** `sql.Open("sqlite", dsn)` appears exactly
+once (`store.go:573`), and every read and write goes through
+`(*Sheet).use(func(db *sql.DB) error)`. A wasm-only `database/sql` driver over the
+sqlite-wasm build swaps the entire store without touching a query. That is the
+most valuable property the store has for this, and it was not designed for it.
+
+**And the storage design underneath it is already solved — steal it, do not
+re-derive it.** `sw-store-spike` landed on **in-memory sqlite-wasm → IndexedDB WAL
+→ two-slot OPFS snapshot**, with *acked-means-durable* proven under a real
+`ServiceWorker.stopWorker` kill at **1,663/1,663**. Note what that sidesteps: the
+OPFS sync-access-handle question does not arise on the hot path, and
+`syncular-sw-spike` found sync access handles work in a service worker anyway
+(only `opfs-sahpool` fails) — including, surprisingly, in Safari.
+
+### The seam this would actually force
+
+ARCHITECTURE.md declines to split the five domains into packages, and gives the
+reason: the backward edges. `view -> web` (23 symbols — the page shell asking each
+feature slice for its fragment) and `live -> web` (15). **A stand-in build is the
+first requirement that would make that split pay**, because it needs `sheet` and
+`view` to compile *without* `web`.
+
+So this is the entry that turns "one flat package, deliberately" from a settled
+decision into a live trade. `spike/layout` already reports the real graph, so the
+cost of cutting it is measurable before anyone commits — and the answer may still
+be to keep the flat package and not build this. **Phase 0 item 1 needs none of
+it**, which is another reason to do that one first.
+
+### Constraints that would bite, in the order they would bite
+
+1. **Size.** Phase 0 item 2 gates the wasm half and is measurable in a day.
+
+2. **The cost will be render fan-out, not sync — and that has already fooled
+   someone once.** `kanban-envelope-spike`'s headline is that the bottleneck was
+   misdiagnosed: **94.6% of the cost was render fan-out, not the sync layer**, and
+   "the outbox queueing phase is a sync cost" is on its list of overturned
+   conclusions. This project is *made* of render fan-out. Budget accordingly, and
+   do not start by optimising a protocol — especially now that there barely is one.
+
+3. **A service worker's cold start wipes in-memory state, and this codebase keeps
+   the diff baseline there.** `gosw` measured it: after 45 s idle Chrome killed the
+   worker, `bootID` changed, `requestCount` reset 4 → 1, uptime 22.2 s → 0.005 s.
+   Every Go global, cache and goroutine is gone. Here that is `screen.heldCell` —
+   *what this browser already holds* — which is what decides morph-vs-insert. The
+   good news is the degradation already exists and is already correct: `editlog.go`
+   falls back to a full morph when history is lost, and "losing history must
+   degrade to *send everything*, never to *send nothing*". Make the stand-in reuse
+   that path rather than inventing one.
+
+4. **Two independent version axes, and a SharedWorker has no upgrade lifecycle at
+   all.** `../hypermedia-sw-demo` lost hours to this and its fix is the one to copy
+   verbatim: the **build id goes in the SharedWorker's name**
+   (`demo-dp-a@38caf19f0e8b`), because a new client connecting to the same name is
+   handed the *existing running instance with its old code* — there is no waiting
+   state to skip and no update to force, and one forgotten tab pins the whole
+   origin to a stale build. The **schema id goes in the replica's database name**
+   (`todos-a@<schemaId>`), because code and schema are invalidated by different
+   edits; ours would hash `migrate()`'s output shape. During the overlap two
+   engines can share one IndexedDB WAL and shred each other *below* the SQL layer,
+   which is what the exclusive `navigator.locks` writer guard is for — 0 violations
+   measured across every overlap.
+
+5. **A stale service worker is the most likely failure, and it fires every time the
+   code changes under an open browser.** Both sides carry the same build stamp and
+   assert it on `page-hello`; on a mismatch, escalate `update()` → `unregister()` →
+   say so. Measured recovery next door: **~205 ms, 3 document loads, local rows
+   preserved.** Also: the first navigation is uncontrolled, so `skipWaiting()` on
+   install plus `clients.claim()` on activate, or the first load goes to the
+   network.
+
+6. **Bootstrap is the scale limit, not concurrency.** `kanban-scale-spike` found 50
+   concurrent clients fine and bootstrap the wall; the fixes were chunked,
+   cursor-resumable, usable-before-complete, and **brotli q2 rather than q5**.
+   Forking a `-seed-rows 10000` sheet — 220,404 cells, 5.4 MB — is precisely that
+   problem, and it is the largest thing this project brings that the todo demo did
+   not. The fork model helps: a copy is taken **while online, on purpose**, so the
+   transfer has a progress bar and a person waiting for it rather than having to be
+   invisible.
+
+7. **Formula determinism has to stay true.** It currently is: the grammar is refs,
+   numbers, four operators and `SUM` (`formula.go`), with nothing reading a clock
+   or an entropy source. "Merge inputs, re-derive outputs" depends on it entirely.
+   The day `NOW()` or `RAND()` is added it must be frozen at commit and stored as
+   an input, not evaluated twice. Cheap to hold, expensive to retrofit.
+
+8. **Sheet ids are unique per box**, per the second-region entry, and a fork mints
+   a new one. Key a local store on `(origin, id)` from the start — free now,
+   awkward later — and give a copy an id that says what it is a copy *of*.
+
+9. **People must not lose track of which sheet is real.** The failure mode a fork
+   model owns. The hypermedia answer is to make forks **visible from the origin**
+   rather than hidden in a browser: the presence layer already knows who is
+   attached, and "3 open copies of this sheet" in the chrome is a few lines. A copy
+   should also say, in its own chrome, what it forked from and when.
+
+10. **Instrumentation perturbs, and this project has a lot of it.** One of the
+    archive's three recurring lessons, and the concrete case is brutal: **a 60 ms
+    status poll prevented service-worker updates entirely** — the probe blocked the
+    thing it was measuring. `otel.go`, the latency chip and any stand-in divergence
+    counter are all candidates for exactly that.
+
+11. **CSP and the shell.** Instantiating wasm in a worker needs
+    `script-src 'wasm-unsafe-eval'` (`headers.go` sets our policy). And the page,
+    the CSS and `vendorjs/` all have to be precached for an offline paint —
+    `assets.go` already content-addresses everything as `/a/{sha256}/{name}` with
+    `immutable` and a year of freshness, which is the hard half done for unrelated
+    reasons.
+
+### What would make this worth building at all
+
+**Not offline.** Offline is one use of the mechanism, and on its own it is a weak
+trade: considerable complexity for something a small fraction of visitors would
+touch.
+
+The mechanism is **branching**, and what-if scenarios are the thing spreadsheets
+handle worst — everyone duplicates a tab, edits both, and loses track of which is
+real. Fork, diff and merge are useful *online*, where the network is fine and the
+motive is "try it without breaking the model". Offline falls out of them. So does
+export, which `README.md` currently lists as missing. That is one mechanism
+earning its keep three times, which is the actual test.
+
+And then the demo moment is still there: go offline, edit a formula in the copy,
+watch a four-hop dependency chain recompute correctly, come back, and merge — with
+the same HTML, the same commands, and no client application code in either state.
+The neighbouring todo demo cannot show that half, because a todo list has no
+derived state to recompute.
