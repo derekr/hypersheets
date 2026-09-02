@@ -449,7 +449,7 @@ it was spiked first.
 | | what it is | cost |
 | --- | --- | ---: |
 | **A. no offline at all** | fork online, merge by copy/paste. `rangeops.go` already does it. | **zero new code** |
-| **B. browser stand-in** | the same Go compiled to wasm, serving the same HTML from a service worker | **4.83 MB gzip**, measured — see Phase 0 |
+| **B. browser stand-in** | the same Go compiled to wasm, serving the same HTML from a service worker | **2.58–4.83 MB gzip**, measured — see Phase 0 |
 | **C. native app** | the *actual server binary* in a webview. [Wails](https://wails.io) is the obvious shape. | one 33.6 MB download, and **no compromises at all** |
 
 Ordered by how much complexity you opt into, which is the only ordering that
@@ -646,7 +646,15 @@ nobody to fan out to); `limits` `reaper` `readonly` `headers` (open-internet pol
 for a shared demo, and a local user on their own copy is not a threat model); the
 `otel` export (nowhere to send it).
 
-**Measured 2026-09-01 (`SPIKE-WASM-STANDIN.md`), that subset does not exist.**
+**Measured 2026-09-01/02 (`SPIKE-WASM-STANDIN.md`), that subset does not exist —
+and the list is not internally consistent either.** It drops `bus`/`registry`/
+`presence` while keeping `screen.go` and `push.go`, which *call* the bus, because
+`push.go` **is** the fan-out. Dropping a file from a reach set does not drop it
+from the build: the resulting binary carries **836 distinct nats-server symbols**
+with real bodies (`-ldflags=-dumpdep`, calibrated against a floor build containing
+zero), including `main.(*Bus).SubscribePresence -> nats.(*Conn).subscribe`.
+
+And the subset does not exist for a second reason.
 Seeding the reference closure with the I/O-free files returns **all 43 root files
 in 11 rounds**, because `Cell`, `Kind` and `Sheet` are declared in `store.go`.
 Compiling the flat package costs **1.18 MB of gzip in package `init` alone** — a
@@ -722,34 +730,64 @@ one structural op per side; merging across a rebalance; and scale — everything
 250 rows, where the merge is a full `UsedRows` scan per side, so 10,000 rows is
 260,000 cells per snapshot and none of the timings above should be assumed to carry.
 
-**2. Size — DONE 2026-09-02, `SPIKE-WASM-STANDIN.md`. The estimate was wrong by
-~2.9x.** Go 1.26.1, `GOOS=js GOARCH=wasm`, `-trimpath -ldflags="-s -w"`:
+**2. Size — DONE 2026-09-02, `SPIKE-WASM-STANDIN.md`, and it took two passes.**
+Go 1.26.1, `GOOS=js GOARCH=wasm`, `-trimpath -ldflags="-s -w"`. The first pass
+priced the entry's own drop list and got **4.64 MB gzip**; the second pass proved
+that binary still contains NATS (above), so **that number may not be quoted as a
+stand-in cost.** Rebuilt honestly, by performing the three relocations
+`SPIKE-LAYOUT.md` already lists as cheap — `otel.go:connAttrs`,
+`render.go:rowHeightPx`, `window.go:rowRange`, of which the two re-supplied come
+to **eleven lines** — the module graph drops to 17 files and `bus.go` is not among
+them:
 
-| stage | gzip -9 |
-| --- | ---: |
-| floor: Go runtime + `net/http` + `database/sql` + gosw's SW bridge | 1.70 MB |
-| + the pure model (grid, bandkey, formula, style) | 3.13 MB |
-| + view | 3.91 MB |
-| + store, mutate, recalc, actor | 4.12 MB |
-| **stand-in — the drop list applied** | **4.64 MB** |
-| everything, NATS and otel included | 8.96 MB |
+| build | files | gzip -9 | brotli |
+| --- | ---: | ---: | ---: |
+| floor: runtime + `net/http` + `database/sql` + gosw's bridge | 0 | 1.70 MB | 1.26 MB |
+| 17 files compiled, none reachable (the `init` tax) | 17 | 1.97 MB | 1.45 MB |
+| **minimal local stand-in, no otel SDK** | **17** | **2.29 MB** | **1.66 MB** |
+| same, read-only | 17 | 2.39 MB | 1.73 MB |
+| the entry's drop list — **contains NATS** | 43 | 4.64 MB | 3.33 MB |
+| everything | 43 | 8.96 MB | 6.31 MB |
 
-Plus `sqlite3.wasm` (400 KB gzip) and `wasm_exec.js` (17 KB): **4.83 MB gzip,
-~3.6 MB brotli — 177x the 27.9 KB first visit, not 60x.**
+All in — plus `sqlite3.wasm` (400 KB gzip) and `wasm_exec.js` (17 KB) — the
+minimal local stand-in is **2.58 MB gzip, 1.93 MB brotli: 95x the 27.9 KB first
+visit.** It decomposes exactly: 1,703,434 floor + 270,911 init + 317,566 of our
+own domain code. **Our code is 14% of it.**
 
-**What failed is the borrowed number.** The floor reproduced `gosw` within 3%, so
-its measurement was right; its *generalisation* — "it barely moves with handler
-code" — is false here. Handler code adds 2.80 MB to a 1.62 MB floor, so **the
-handler is 1.7x the runtime**. A neighbouring project's size figure is not
-transferable, and this entry cited one as if it were.
+**But it does not include `render.go`, and that is the catch.** A 17-file build
+owns the model and has no renderer, so it cannot serve the page this project
+serves. *"The same HTML, no client rewrite"* is precisely what the 2.15 MB between
+the two builds pays for. **The build this entry actually wants — same HTML, no
+NATS — was never measured; it lies between 2.29 MB and 4.64 MB.** Quote the range,
+not an end of it.
 
-**The conclusion survives and hardens.** Opt-in only, never on the first-paint
-path — the fork model already makes it one, because "take a copy offline" is a
-button somebody presses, and 4.83 MB behind a deliberate button is a different
-proposition from 4.83 MB on arrival. But 177x is no longer a throwaway, and it is
-the number that makes **option C in the table above** worth taking seriously: a
-Wails build ships one 33.6 MB binary *once*, with no size cliff per sheet, no
-missing filesystem and no driver to write.
+**Three results that change the recommendation:**
+
+- **77% of the `init` tax is recoverable, and it needs no package split.**
+  1,178,689 bytes over 43 files becomes 270,911 over 17. The recovery comes from
+  *not compiling* 26 files, which three eleven-line moves already achieve — so the
+  conclusion is not "too big" but **"too big until the moves ARCHITECTURE.md
+  already calls cheap"**. (It is an upper bound on what splitting could recover: a
+  split that still imported everything would recover nothing.)
+- **Read-only is not a smaller system — 4%.** The linker keeps `migrate`,
+  `bulkInsert`, `scratch`, `rebalance`, `ensureRows`, because `openSheetFile` runs
+  `schemaDDL`/`migrate`/`indexDDL`. **A sheet that has been opened has been written
+  to.** "No formula recalc" fails identically: `recalc` is called from `mutate`. So
+  the Monzo instinct — make the stand-in do less — **does not pay in Go**, and a
+  genuinely cheap read-only path has to be a static HTML snapshot with no wasm at
+  all rather than a smaller binary.
+- **The otel SDK is removable for 200 KB; the API is not removable at any price.**
+  `StartTracing` is the only function touching the SDK, but `tracer.Start(ctx, …)`
+  is at **30 call sites across 9 files** and `ctx` is threaded through the store for
+  it. 708 otel API symbols survive in the smallest build. That is a floor, and it is
+  a finding about this codebase rather than about wasm: **tracing here is part of
+  the call signature, not a layer.**
+
+**The conclusion, restated.** Opt-in only, never on the first-paint path — the fork
+model already makes it one. 95x is a different argument from 177x, and both are
+different from "it barely moves with handler code", which is the borrowed claim
+that started this. What did not change: option C ships one binary once, with no
+per-sheet size cliff, no missing filesystem and no driver to write.
 
 **3. The store seam is real, and there is a sharp trap in it.** `modernc.org/sqlite`
 does not build for wasm — verified, go 1.26.1, libc v1.74.4, both targets failing
@@ -813,11 +851,12 @@ first requirement that would make that split pay**, because it needs `sheet` and
 `view` to compile *without* `web`.
 
 So this is the entry that turns "one flat package, deliberately" from a settled
-decision into a live trade — and Phase 0 item 2 put a price on it. **1.18 MB of
-gzip is package `init` for code that is never called**, and one 12-line function
-(`connAttrs`) is worth 879 KB on its own. `spike/layout` already reports the real
-graph and already names the three misfilings involved, so the cost of cutting is
-measurable before anyone commits.
+decision into a live trade — except that Phase 0 item 2 found the trade is not
+needed. **The three relocations are worth 51% of the binary, and they are eleven
+lines.** `SPIKE-LAYOUT.md` already names all three as cheap tidy-ups on readability
+grounds alone; they now also happen to be the single largest lever on size. No
+package split is required to collect that — the saving comes from *not compiling*
+26 files, and the moves are what make omission possible.
 
 Two things to hold on to. **Option C needs none of this** — a Wails build links
 the whole binary and does not care what is reachable from what, so the split is
@@ -832,9 +871,10 @@ true regardless of how this trade goes.
 does not have; 2, 7, 8, 9 and 10 apply to any of the three. Read the list with that
 split in mind before treating it as the cost of offline in general.
 
-1. **Size — measured, 4.83 MB gzip, 177x the page.** No longer a gate to be
-   measured but a price to be accepted or refused. See Phase 0 item 2, and note
-   that most of the recoverable part is the flat package rather than wasm.
+1. **Size — measured, and the honest figure is a range: 2.58 MB gzip with no
+   renderer, 4.83 MB with everything but not NATS-free.** No longer a gate to be
+   measured but a price to be accepted or refused. Note that the largest lever is
+   three eleven-line relocations, not wasm.
 
 2. **The cost will be render fan-out, not sync — and that has already fooled
    someone once.** `kanban-envelope-spike`'s headline is that the bottleneck was
@@ -947,13 +987,19 @@ paying the bill. It is also the purest possible statement of the thesis: *offlin
 is a deployment topology, not an architecture*, demonstrated by changing the
 deployment and nothing else.
 
-**B is the interesting one and the weakest one.** 177x the page weight, behind a
-button, for the ability to keep a forked copy in a browser tab — and it is the only
-option that has to be *argued for* rather than measured. The argument is that it is
-the version a reader can try without installing anything, which for a demo whose
-entire job is to be tried is not nothing. Worth building only if the size comes
-down, which is a question about the package split rather than about wasm.
+**B is the interesting one and the weakest one.** Somewhere between 95x and 177x
+the page weight, behind a button, for the ability to keep a forked copy in a browser
+tab — and it is the only option that has to be *argued for* rather than measured.
+The argument is that it is the version a reader can try without installing anything,
+which for a demo whose entire job is to be tried is not nothing.
 
-The order that follows: **A now. C when offline support is actually wanted. B only
-if the split makes it cheap** — and the split is worth doing on its own merits or
-not at all.
+Its cost also turned out to be mostly ours rather than wasm's: three eleven-line
+relocations are worth 51%, and the two builds that bracket the real answer differ by
+whether they contain `render.go`. **So the next measurement, if anyone wants B, is
+the only one that matters: the 17-file build plus the renderer.** Everything else is
+now known.
+
+The order that follows: **A now. C when offline support is actually wanted. B if
+that last measurement comes in near the bottom of the range** — and the three
+relocations are worth doing either way, on the readability grounds
+`SPIKE-LAYOUT.md` already argued.
