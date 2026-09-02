@@ -430,21 +430,34 @@ same move the latency chip already makes, applied one level up.
 
 ---
 
-## Offline is a COPY of the sheet, not a mode on it (EARMARKED 2026-09-01 — direction chosen, nothing built)
+## Offline is a COPY of the sheet, not a mode on it (EARMARKED — two spikes done 2026-09-01/02, nothing shipped)
 
 "Does it work offline?" is the demo's most common objection, and it is four
 questions wearing one word: *will it survive my elevator*, *will I lose my work*,
 *can I read this on a plane*, *can I write on a plane and see the result*. The
-first three are already cheap. Only the fourth is architecture, and it gets two
-answers, both of which are refusals to build a sync engine:
+first three are already cheap. Only the fourth is architecture, and the answer is
+two independent decisions that keep getting confused with each other:
 
-1. **Relocate the server** — the same Go, compiled to wasm, serving the same HTML
-   from a service worker. Offline becomes a deployment topology, not an
-   architecture.
-2. **Fork the sheet** — what you take offline is a *copy*, with its own id, its
-   own database and its own URL. Nothing merges by itself.
+**What you take offline** — a *fork*. A copy of the sheet with its own id, its own
+database and its own URL, minted deliberately while online. Nothing merges by
+itself. This is the load-bearing decision, it is what refuses to build a sync
+engine, and **it is independent of how the offline copy is served** — which is why
+it was spiked first.
 
-The second is the load-bearing one, and it is what makes the first affordable.
+**Where it runs** — three options, and the fork model works with all three:
+
+| | what it is | cost |
+| --- | --- | ---: |
+| **A. no offline at all** | fork online, merge by copy/paste. `rangeops.go` already does it. | **zero new code** |
+| **B. browser stand-in** | the same Go compiled to wasm, serving the same HTML from a service worker | **4.83 MB gzip**, measured — see Phase 0 |
+| **C. native app** | the *actual server binary* in a webview. [Wails](https://wails.io) is the obvious shape. | one 33.6 MB download, and **no compromises at all** |
+
+Ordered by how much complexity you opt into, which is the only ordering that
+matters. **C is the honest destination for real offline support** — it runs the
+real `modernc.org/sqlite`, a real filesystem, a real WAL, and the client is a
+webview pointed at localhost, so *nothing in this codebase changes*. B is the
+compromise that keeps it in a browser tab, and the measurements below are what
+that compromise actually costs.
 
 **This topology has already been built twice in the neighbouring trees, and most
 of what follows is their measurements rather than this project's reasoning.** See
@@ -623,17 +636,35 @@ conditional formatting is already in this backlog and is the same mechanism.
 Conflicts render as cell backgrounds, so **a merge review is itself a sheet** —
 which is a good thing for a spreadsheet to be able to say.
 
-### What the stand-in is, exactly
+### What the stand-in is — and the drop list was fiction
 
-**`sheet` + `view`, and nothing else** — the two domains ARCHITECTURE.md's graph
-already points *at*. A copy has one viewer, and much of this codebase exists
-because a sheet has more than one:
+The plan was **`sheet` + `view` and nothing else**, the two domains
+ARCHITECTURE.md's graph already points *at*, on the reasoning that a copy has one
+viewer and much of this codebase exists because a sheet has more than one. What a
+stand-in does not need: the embedded NATS server (`bus` `registry` `presence` —
+nobody to fan out to); `limits` `reaper` `readonly` `headers` (open-internet policy
+for a shared demo, and a local user on their own copy is not a threat model); the
+`otel` export (nowhere to send it).
 
-| dropped | because |
-| --- | --- |
-| `bus` `registry` `presence` — the embedded NATS server | nobody to fan out to, and **measured elsewhere as unaffordable anyway**: `gosw-nats` got nats-server + JetStream *running* in a browser worker, at **5.0 MB brotli and 46–100 MB of non-reclaimable wasm memory**. Rejected there; rejected here. |
-| `limits` `reaper` `readonly` `headers` | open-internet policy for a shared demo. A local single user on their own copy is not a threat model. Nothing replays, so nothing arrives at the origin to be refused. |
-| `otel` export | nowhere to send it |
+**Measured 2026-09-01 (`SPIKE-WASM-STANDIN.md`), that subset does not exist.**
+Seeding the reference closure with the I/O-free files returns **all 43 root files
+in 11 rounds**, because `Cell`, `Kind` and `Sheet` are declared in `store.go`.
+Compiling the flat package costs **1.18 MB of gzip in package `init` alone** — a
+quarter of the stand-in, for code that is never called. You cannot drop those
+files; you can only fail to call them, and the linker charges you anyway.
+
+**One 12-line observability helper drags in the entire NATS server.**
+`connAttrs(scr *screen)` (`otel.go:217`) → `screen.go` → `registry.go` → `bus.go`.
+Cutting that one edge drops the model closure from 43 files to 15, and **879 KB of
+gzip**. It is the `obs → live` edge that `SPIKE-LAYOUT.md` already files under
+cheap tidy-ups; the other two blockers (`rowHeightPx`, `rowRange`) are that same
+document's other named misfilings. For scale, the dependencies price at
+**nats-server +3.85 MB gzip**, nats.go +1.22 MB, otel SDK +0.31 MB, and datastar
+and httpcompression +0.01 MB each.
+
+So the interesting version of the size question is not "how small is the subset"
+but **"how much of this is the flat package charging us for organisation we chose
+for readers"** — which is the trade the next section is about.
 
 **Deliberately not supported**, and the UI should say so rather than degrade
 quietly: multiplayer inside a copy (a fork is single-player by definition);
@@ -691,44 +722,87 @@ one structural op per side; merging across a rebalance; and scale — everything
 250 rows, where the merge is a full `UsedRows` scan per side, so 10,000 rows is
 260,000 cells per snapshot and none of the timings above should be assumed to carry.
 
-**2. Size, and it is the gate on the wasm half.** `gosw` measured the real floor
-for a Go `net/http` handler in a service worker — and noted it **"barely moves
-with handler code"**, which is the encouraging half:
+**2. Size — DONE 2026-09-02, `SPIKE-WASM-STANDIN.md`. The estimate was wrong by
+~2.9x.** Go 1.26.1, `GOOS=js GOARCH=wasm`, `-trimpath -ldflags="-s -w"`:
 
-| | |
-|---|---|
-| `gosw` app.wasm, Go 1.26.1, `-trimpath -ldflags="-s -w"` | **6.01 MB raw, 1.68 MB gzip** |
-| plus `wasm_exec.js` | 17 KB |
-| `../hypermedia-sw-demo` for comparison (TypeScript) | 774 KB data plane + 848 KB `sqlite3.wasm` |
-| **sheetstream first visit today** | **27.9 KB** |
+| stage | gzip -9 |
+| --- | ---: |
+| floor: Go runtime + `net/http` + `database/sql` + gosw's SW bridge | 1.70 MB |
+| + the pure model (grid, bandkey, formula, style) | 3.13 MB |
+| + view | 3.91 MB |
+| + store, mutate, recalc, actor | 4.12 MB |
+| **stand-in — the drop list applied** | **4.64 MB** |
+| everything, NATS and otel included | 8.96 MB |
 
-So ~1.7 MB gzip is the honest expectation, roughly **60x the entire page as it
-ships**. Survivable *only* as an explicit opt-in — and the fork model already
-makes it one, because "take a copy offline" is a button somebody presses. **The
-stand-in must never be on the first-paint path.** If it ever loads by default, the
-demo has spent its best number on a feature most visitors will not use.
+Plus `sqlite3.wasm` (400 KB gzip) and `wasm_exec.js` (17 KB): **4.83 MB gzip,
+~3.6 MB brotli — 177x the 27.9 KB first visit, not 60x.**
 
-**3. `modernc.org/sqlite` does not build for wasm.** Measured 2026-09-01, go
-1.26.1, libc v1.74.4 — both targets fail identically:
+**What failed is the borrowed number.** The floor reproduced `gosw` within 3%, so
+its measurement was right; its *generalisation* — "it barely moves with handler
+code" — is false here. Handler code adds 2.80 MB to a 1.62 MB floor, so **the
+handler is 1.7x the runtime**. A neighbouring project's size figure is not
+transferable, and this entry cited one as if it were.
 
-```
-GOOS=js GOARCH=wasm     -> modernc.org/libc/{errno,limits,pthread,signal,stdio,sys/types}:
-GOOS=wasip1 GOARCH=wasm    build constraints exclude all Go files
-```
+**The conclusion survives and hardens.** Opt-in only, never on the first-paint
+path — the fork model already makes it one, because "take a copy offline" is a
+button somebody presses, and 4.83 MB behind a deliberate button is a different
+proposition from 4.83 MB on arrival. But 177x is no longer a throwaway, and it is
+the number that makes **option C in the table above** worth taking seriously: a
+Wails build ships one 33.6 MB binary *once*, with no size cliff per sheet, no
+missing filesystem and no driver to write.
 
-**The seam for the fix is one line.** `sql.Open("sqlite", dsn)` appears exactly
-once (`store.go:573`), and every read and write goes through
-`(*Sheet).use(func(db *sql.DB) error)`. A wasm-only `database/sql` driver over the
-sqlite-wasm build swaps the entire store without touching a query. That is the
-most valuable property the store has for this, and it was not designed for it.
+**3. The store seam is real, and there is a sharp trap in it.** `modernc.org/sqlite`
+does not build for wasm — verified, go 1.26.1, libc v1.74.4, both targets failing
+identically in `modernc.org/libc/{errno,limits,pthread,signal,stdio,sys/types}`.
+The fix is as cheap as claimed: `sql.Open("sqlite", dsn)` really is the only one
+(`store.go:573`), everything goes through `(*Sheet).use(func(db *sql.DB) error)`,
+and **nothing anywhere reaches below `database/sql`** — no sqlite type, no custom
+function, no `driver.Conn`. (The blank import is in five files, not one, which is
+fallout from the `store.go` split and is cosmetic.)
 
-**And the storage design underneath it is already solved — steal it, do not
-re-derive it.** `sw-store-spike` landed on **in-memory sqlite-wasm → IndexedDB WAL
-→ two-slot OPFS snapshot**, with *acked-means-durable* proven under a real
-`ServiceWorker.stopWorker` kill at **1,663/1,663**. Note what that sidesteps: the
-OPFS sync-access-handle question does not arise on the hot path, and
-`syncular-sw-spike` found sync access handles work in a service worker anyway
-(only `opfs-sahpool` fails) — including, surprisingly, in Safari.
+What a driver must implement: `Driver`/`DriverContext`+`Connector`,
+`Conn`+`ConnPrepareContext`+`ConnBeginTx`, `ExecerContext`/`QueryerContext`
+(nominally optional, but ~150 one-shot calls cost three round trips each without
+them), `Stmt`, `Tx`, `Rows`, `Result`, `Pinger`/`SessionResetter`/`Validator`.
+`driver.Value` needs INTEGER/TEXT/BLOB/NULL only. `WITHOUT ROWID`, the six partial
+indexes, `INDEXED BY`, the `temp.` scratch tables and `PRAGMA user_version` are all
+ordinary SQLite and free in sqlite-wasm.
+
+> **The trap is `NumInput`.** `dependentsSQL` writes `?1`/`?2` six times each while
+> binding two parameters. A driver that counts `?` occurrences — the obvious
+> implementation — breaks **every recalculation**. Also worth knowing: there is not
+> a single `*Context` call in the repo, so nothing can cancel a query.
+
+**WAL is neither available nor needed in the browser, and that costs something the
+thesis cares about.** `sw-store-spike` runs sqlite-wasm in memory with its own
+IndexedDB changeset WAL and a two-slot OPFS snapshot — *acked-means-durable* proven
+under a real `ServiceWorker.stopWorker` kill at **1,663/1,663**. So
+`journal_mode(WAL)` and `busy_timeout` go, and forking becomes
+`sqlite3_js_db_export()` rather than `VACUUM INTO`, which incidentally makes
+`SPIKE-FORK-MERGE.md`'s silent-empty-copy hazard disappear in the browser (it
+remains real host-side). Two costs nobody had counted:
+
+- **A changeset WAL record is proportional to cells rewritten**, and
+  `SPIKE-FORK-MERGE.md` measured exactly that: ~1,035 records for one row insert,
+  58,300 for a rebalance. The two spikes collide here, and not in our favour.
+- **Losing WAL loses "a push never waits on an edit"** — one of ARCHITECTURE.md's
+  five load-bearing ideas, which rests on WAL readers running concurrently with the
+  single writer. In the browser it becomes eight pooled handles onto one serialized
+  engine. Under option C it is simply retained.
+
+**4. The seam nobody counted: the sheet lifecycle is filesystem-shaped.** Eleven
+`os.*` sites (`MkdirAll`, `Stat`, `ReadDir`, `Remove`, `WriteFile`) plus
+`filepath.Join(dir, id+".db")`. These **compile for `GOOS=js` and cannot run** —
+`wasm_exec.js` answers 23 filesystem entry points with `ENOSYS`. The fix is either
+`gosw-nats/web/gofs.js` (~480 lines, the archive lists it as reusable) or a second
+seam that makes a sheet an opaque handle rather than a path. Under option C this
+seam does not exist at all.
+
+**Not established, and it is what killed the neighbouring NATS attempt:** runtime
+linear memory. `gosw-nats` was rejected as much for 46–100 MB of non-reclaimable
+wasm memory as for its size. Everything in Phase 0 item 2 is compile- and link-time;
+nothing has been observed running, SQLite is a stub, and `sqlite3.wasm` was added
+arithmetically.
 
 ### The seam this would actually force
 
@@ -739,14 +813,28 @@ first requirement that would make that split pay**, because it needs `sheet` and
 `view` to compile *without* `web`.
 
 So this is the entry that turns "one flat package, deliberately" from a settled
-decision into a live trade. `spike/layout` already reports the real graph, so the
-cost of cutting it is measurable before anyone commits — and the answer may still
-be to keep the flat package and not build this. **Phase 0 item 1 needs none of
-it**, which is another reason to do that one first.
+decision into a live trade — and Phase 0 item 2 put a price on it. **1.18 MB of
+gzip is package `init` for code that is never called**, and one 12-line function
+(`connAttrs`) is worth 879 KB on its own. `spike/layout` already reports the real
+graph and already names the three misfilings involved, so the cost of cutting is
+measurable before anyone commits.
+
+Two things to hold on to. **Option C needs none of this** — a Wails build links
+the whole binary and does not care what is reachable from what, so the split is
+only worth doing if the browser stand-in is. And **Phase 0 item 1 needed none of
+it either**, which is why the fork model could be settled first and why it remains
+true regardless of how this trade goes.
 
 ### Constraints that would bite, in the order they would bite
 
-1. **Size.** Phase 0 item 2 gates the wasm half and is measurable in a day.
+**Most of these are option B's bill, not the fork model's.** Constraints 3 through
+6 and 11 are service-worker and browser-storage problems that a Wails build simply
+does not have; 2, 7, 8, 9 and 10 apply to any of the three. Read the list with that
+split in mind before treating it as the cost of offline in general.
+
+1. **Size — measured, 4.83 MB gzip, 177x the page.** No longer a gate to be
+   measured but a price to be accepted or refused. See Phase 0 item 2, and note
+   that most of the recoverable part is the flat package rather than wasm.
 
 2. **The cost will be render fan-out, not sync — and that has already fooled
    someone once.** `kanban-envelope-spike`'s headline is that the bottleneck was
@@ -842,3 +930,30 @@ watch a four-hop dependency chain recompute correctly, come back, and merge — 
 the same HTML, the same commands, and no client application code in either state.
 The neighbouring todo demo cannot show that half, because a todo list has no
 derived state to recompute.
+
+### Which of the three, then
+
+**A ships now and is not a placeholder.** Fork online, merge by copy and paste,
+zero new code. It answers three of the four questions the entry opens with, and
+`rangeops.go` is the merge tool.
+
+**C is the destination for real offline support.** [Wails](https://wails.io) runs
+the actual server binary in a webview: real `modernc.org/sqlite`, real filesystem,
+real WAL, real single-writer actor, and **not one line of this codebase changes**.
+Every cost Phase 0 measured — the 4.83 MB, the missing filesystem, the driver with
+the `NumInput` trap, the lost concurrent-reader property — exists only because the
+browser cannot run the server, and a native app removes the premise rather than
+paying the bill. It is also the purest possible statement of the thesis: *offline
+is a deployment topology, not an architecture*, demonstrated by changing the
+deployment and nothing else.
+
+**B is the interesting one and the weakest one.** 177x the page weight, behind a
+button, for the ability to keep a forked copy in a browser tab — and it is the only
+option that has to be *argued for* rather than measured. The argument is that it is
+the version a reader can try without installing anything, which for a demo whose
+entire job is to be tried is not nothing. Worth building only if the size comes
+down, which is a question about the package split rather than about wasm.
+
+The order that follows: **A now. C when offline support is actually wanted. B only
+if the split makes it cheap** — and the split is worth doing on its own merits or
+not at all.
