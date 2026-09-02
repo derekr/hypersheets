@@ -1,0 +1,34 @@
+// The three relocations SPIKE-LAYOUT.md lists under "what was not done, and
+// should be decided", performed on the copies so their effect can be measured.
+// Nothing in the repository is modified; the harness cuts each declaration from
+// the file that misfiles it (-cut) and this file supplies it on the side it
+// belongs on.
+//
+//	otel.go:connAttrs      the `obs -> live` edge. Not re-supplied: nothing in a
+//	                       local build has a `screen` to describe, and if
+//	                       anything did the build would fail rather than quietly
+//	                       drag the realtime layer back in.
+//	render.go:rowHeightPx  the `sheet -> view` edge. A layout constant filed in
+//	                       the renderer; SPIKE-LAYOUT.md says move it to grid.go.
+//	window.go:rowRange     the `sheet -> view` edge. "the window range types, on
+//	                       the wrong side".
+//
+// Both bodies below are copied verbatim from their current homes. They are
+// eleven lines between them, which is the point.
+
+package main
+
+// rowHeightPx is one row. Copied from render.go's layout geometry block.
+const rowHeightPx = 22
+
+// rowRange is an inclusive row range. Hi < Lo means empty. Copied from window.go.
+type rowRange struct{ Lo, Hi int }
+
+func (r rowRange) empty() bool { return r.Hi < r.Lo }
+
+func (r rowRange) rows() int {
+	if r.empty() {
+		return 0
+	}
+	return r.Hi - r.Lo + 1
+}

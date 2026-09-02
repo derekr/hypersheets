@@ -19,6 +19,11 @@ once — but it is a `database/sql` seam sitting on top of a *filesystem* seam n
 counted, and the pragma it carries (`journal_mode(WAL)`) is meaningless in the storage
 model `sw-store-spike` landed on.
 
+**Amended below.** Two of these figures were re-measured at link level and one claim did
+not survive: the stand-in binary still contains NATS. A deliberately smaller local
+stand-in — the model without the view layer — is **2.58 MB gzip**, which is 1.5x the
+entry's estimate rather than 2.9x. See findings 10 to 15.
+
 Evidence: `spike/wasmsize`. Run `go run ./spike/wasmsize`, one stage with `-stage=standin`,
 the dependency prices with `-deps`, the closure explanation with `-why`, and finding 5's
 one-function experiment with `-cut='otel.go:connAttrs'`.
@@ -75,9 +80,12 @@ those files declare. The linker's dead-code elimination then decides how much of
 the domain actually reaches. That is a judgement-free denominator: *everything these files
 declare, plus everything they transitively call.*
 
-**Reproducibility.** Rebuilding the same stage gives the same raw byte count and a
-compressed size that moves by up to ~200 bytes (0.01%), so treat the last three digits as
-noise. The assembled package is `gofmt` clean and passes `GOOS=js GOARCH=wasm go vet`.
+**Reproducibility.** Rebuilding a stage reproduces its **raw** byte count exactly. The
+compressed sizes move by a handful of bytes (gzip) and up to ~600 (brotli), because the
+linker embeds a build id that varies without changing the binary's length — so treat the
+last three digits of a compressed figure as noise. Every stage in this document was
+rebuilt end to end after the amendment and every raw figure was identical. The assembled
+package is `gofmt` clean and passes `GOOS=js GOARCH=wasm go vet`.
 
 **Cross-check that the method does not inflate.** Building the root package with its own
 real `main()` as the sole entry point — no shim, no reachability file, nothing but the
@@ -215,6 +223,11 @@ the embedded NATS server at 5.0 MB brotli; measured here against a bare floor it
 `bus`/`registry`/`presence` is not an optimisation, it is the only reason a stand-in is
 discussable at all.**
 
+**Read this with finding 10.** Dropping those files from a stage's *reach* set does not
+drop them from the *build*: the `standin` binary contains 836 `nats-server` symbols.
+Only the `local` rows below are NATS-free, and they are NATS-free because those files are
+not compiled at all.
+
 Two things worth noticing. Datastar and httpcompression are **free** — 10 KB between them.
 And the NATS *client* alone is 1.22 MB gzip, so a stand-in that talked to a remote NATS
 rather than embedding one would still pay most of a megabyte for the privilege.
@@ -253,6 +266,9 @@ All stages, all 43 files compiled, reachability restricted to the named files:
 The shape: the floor is 37% of the stand-in's gzip, package initialisation is another 25%,
 and the domains the stand-in exists to run are the remaining 38%. Nothing here is a
 rounding error that better flags would remove.
+
+**These rows are not NATS-free.** All eight compile the whole flat package; finding 10
+shows what that means at link level. The NATS-free measurements are in finding 11.
 
 `view` (3.73) sits below `store` (3.93) and below `sheet`+`view` because the reach sets are
 different domains, not nested — read the rows as *"hold this domain reachable"*, not as a
@@ -461,3 +477,175 @@ opaque handle instead of a path. **The second is the better answer and it is not
   11 in-process. `kanban-bootstrap-quick` found **q2, not q5**, was the right setting for
   a bootstrap payload; nobody has checked what q2 does to a 17 MB wasm module, and for a
   one-time opt-in download the tradeoff is the opposite of theirs anyway.
+
+---
+
+# Amendment — can NATS and otel go entirely, and what is the smallest useful thing?
+
+Four questions after the first pass, and **the first one refutes a claim above.**
+
+New evidence: `-ldflags=-dumpdep`, which makes the linker print the symbol graph it
+actually kept. Calibrated against the `floor` build, which contains **zero** `nats` and
+**zero** `opentelemetry` symbols — so a non-zero count is a fact about the binary, not an
+artefact of the tool. New stages: `-stage=local`, `local-ro`, `local-inits`, `local-nosdk`.
+
+## Finding 10 — NATS is in the `standin` binary. Finding 6 read as if it were not; it is not
+
+Dropping `bus`/`registry`/`presence` from a stage's *reach* set does not drop them from the
+*build*, and the linker disagreed with the reachability analysis:
+
+| build | distinct `nats-server` symbols linked | otel SDK | stdouttrace |
+| --- | ---: | :---: | :---: |
+| `floor` (calibration) | **0** | no | no |
+| **`standin`** | **836** | **yes** | **yes** |
+| `local` | **0** | yes | yes |
+| `local-nosdk` | **0** | **no** | **no** |
+
+836 distinct symbols with real bodies — `(*Account).addServiceImportWithClaim`,
+`(*ApiError).Error`, and so on. And the edges say it is not merely package
+initialisation:
+
+    main.(*Bus).SubscribePresence -> nats%2ego.(*Conn).subscribe
+    main.(*Bus).PublishPresence   -> nats%2ego.(*Conn).publish
+    main.(*Registry).register     -> nats%2ego.(*Subscription).Unsubscribe
+
+**The entry's drop list is not internally consistent.** It drops `bus`/`registry`/
+`presence` but keeps `screen.go` and `push.go` — and those *call* the bus, because
+`push.go` **is** the fan-out. You cannot keep the SSE push path and drop the fan-out. So
+the honest choice is not "which files do I stop calling" but "which files do I stop
+compiling", and that is a different and much more restrictive question.
+
+**Nothing above 4.43 MB should be quoted as NATS-free.** Only the `local` rows are.
+
+## Finding 11 — the smallest thing that can own a forked sheet is 2.29 MB gzip
+
+`local` is the sheet domain whole — model, store, actor, `mutate`, `recalc`, `editlog`,
+`rowheight` — the gosw bridge, one viewer, **no view layer, no `http.go`, no `push.go`,
+no `bus.go`**. To get it to compile, the harness performs the three relocations
+`SPIKE-LAYOUT.md` lists under *"what was not done, and should be decided"*, on the copies:
+`otel.go:connAttrs`, `render.go:rowHeightPx`, `window.go:rowRange`. The two that are
+re-supplied are **eleven lines** between them (`spike/wasmsize/graft/relocated.go.txt`).
+
+| build | files | raw | gzip -9 | brotli -q11 |
+| --- | ---: | ---: | ---: | ---: |
+| `floor` | 0 | 6,043,406 | 1,703,434 | 1,263,367 |
+| `local-inits` — the 17 compiled, none reachable | 17 | 7,125,972 | 1,974,345 | 1,454,041 |
+| **`local-nosdk`** — `local` without the otel SDK | 17 | 8,347,901 | **2,291,911** | **1,658,786** |
+| `local-ro` — read path only | 17 | 8,761,920 | 2,391,579 | 1,731,166 |
+| `local` | 17 | 9,148,449 | 2,491,963 | 1,798,428 |
+| `standin` (for contrast) | 43 | 18,426,857 | 4,643,857 | 3,330,348 |
+
+It decomposes exactly: **1,703,434 floor + 270,911 package init + 317,566 domain =
+2,291,911.**
+
+All in — plus `sqlite3.wasm` (399,968 gzip) and `wasm_exec.js` (16,992) — a local
+stand-in is **2,708,871 bytes ≈ 2.58 MB gzip**, or **2,023,040 ≈ 1.93 MB brotli**
+(`sqlite3.wasm` compresses to 347,262 brotli, measured). Against the entry's
+~1.7 MB that is **1.5x, not 2.9x**, and **95x the 27.9 KB first visit rather than 177x**.
+
+**So the entry's estimate is roughly right for a deliberately smaller system and badly
+wrong for the one it describes** — which is the Monzo shape the entry is built on,
+arriving from the direction nobody expected.
+
+**What this number does not buy: the page.** `render.go` is not in it. The promise of "the
+same HTML, no client rewrite" is exactly what the 2.15 MB between `local` and `standin`
+pays for, and it cannot be had at this price. A local stand-in owns the *model* and would
+need a fresh, small renderer — new code, unmeasured here, and the honest cost of the
+smaller ambition.
+
+## Finding 12 — the 879,454 does NOT compose with the stand-in figure, and the real saving is bigger
+
+Asked directly: no. That number was measured against the `model` closure; the `standin`
+row is a different construction, and adding them would be wrong. Measured end to end
+instead:
+
+    standin  4,643,857 gzip  ->  local-nosdk  2,291,911 gzip
+    saving   2,351,946 bytes  (51%)
+
+The three relocations are what make the saving *available*; the saving itself is dropping
+26 files from the build.
+
+## Finding 13 — 77% of the package-`init` cost is recoverable, and that changes the recommendation
+
+Finding 7 measured the bound at 1,178,689 bytes of gzip and did not establish recovery.
+Recovery, measured the same way for the 17-file local set:
+
+| compiled | files | init cost over floor (gzip) |
+| --- | ---: | ---: |
+| the whole flat package | 43 | 1,178,689 |
+| the local set | 17 | **270,911** |
+| **recovered** | | **907,778 — 77%** |
+
+**What kind of approximation this is.** It measures *not compiling* 26 files, which is
+what a package split makes possible — not the split itself. A split that still had the
+stand-in importing everything would recover nothing. The number is therefore an upper
+bound on what splitting buys, and an exact figure for what *omission* buys.
+
+The more interesting half: **omission needs no package split at all today.** Three
+declarations moved to the side `SPIKE-LAYOUT.md` already says they belong on gets the
+whole way there. So the conclusion is not "this is too big" — it is **"this is too big
+until three eleven-line moves ARCHITECTURE.md already calls cheap"**, and after them the
+gate is roughly where the entry thought it was.
+
+## Finding 14 — the otel SDK is removable for one function; the otel API is not removable at all
+
+`otel.go:55` is `var tracer trace.Tracer = noop.NewTracerProvider().Tracer("sheetstream")`,
+and `StartTracing` is the **only** function in the repository that touches
+`sdktrace`, `stdouttrace` or `resource`. Cutting it leaves six imports unused — the
+compiler says so, which is itself the proof:
+
+    ./otel.go: "fmt", "os", "go.opentelemetry.io/otel",
+               ".../stdouttrace", ".../sdk/resource", ".../sdk/trace" imported and not used
+
+Cut it and prune those six lines and the SDK is gone at link level: **0 `otel/sdk`, 0
+`stdouttrace`**, worth **200,052 bytes gzip**. That is one function and six import lines —
+but it *is* a source edit, so: **the otel SDK cannot be removed without touching
+`otel.go`.**
+
+**The otel API cannot be removed at any price.** `tracer.Start(ctx, …)` appears at **30
+call sites across 9 files** (`http.go` 15, `push.go` 5, `rangeops.go` 2, `registry.go` 2,
+`storeread.go` 2, `storewrite.go` 2, `structure.go`, `styleui.go`, `presenceui.go`), and
+`context.Context` is threaded through the store for it. Inside the local set alone that is
+four call sites in `storeread.go` and `storewrite.go`. 708 otel API symbols survive in the
+smallest build measured. **That is a floor, and it is a finding about the codebase rather
+than about wasm**: tracing here is not a layer that can be lifted off, it is part of the
+call signature. The noop provider makes it cheap at runtime; it does not make it absent.
+
+## Finding 15 — "read-only" is not a smaller system here, because opening a sheet writes to it
+
+The suggestion was that read-only rendering with no write path might be much smaller. It
+is 4% smaller: 2,391,579 gzip against 2,491,963. The linker says why — with only the read
+path anchored, it still keeps `migrate`, `bulkInsert`, `scratch`, `rebalance`,
+`commitIndex`, `commitStyles`, `bumpVersion` and `ensureRows`.
+
+`openSheetFile` runs `schemaDDL`, then `migrate(db)`, then `indexDDL`, and the band index
+is committed on open. **A sheet that has been opened has been written to.** There is no
+read-only mode to have; there is only a store with fewer entry points. Dropping *formula
+recalculation* was not measured for the same reason — `recalc` is called from `mutate`, so
+removing it from the reach set removes nothing.
+
+## Where this leaves the gate
+
+Given that full offline is now Wails — the real binary against real `modernc.org/sqlite`,
+no wasm — and the browser path is the compromise:
+
+| ambition | gzip all in | vs 27.9 KB | what it gives up |
+| --- | ---: | ---: | --- |
+| the stand-in as the entry describes it | 5.06 MB | 177x | nothing — but it still contains NATS |
+| **the model, locally, with a fresh renderer** | **2.71 MB** | **95x** | `render.go`, so "the same HTML" |
+| Wails | n/a | n/a | the browser |
+
+**The recommendation this supports:** do not build the entry's stand-in. Build the smaller
+one, or nothing. And do the three relocations regardless — they cost eleven lines, they
+are already recommended on readability grounds, and they are what makes any of this
+possible.
+
+## What this amendment did not test
+
+- **The fresh renderer.** The `local` numbers contain no HTML at all. Whatever replaces
+  `render.go` is new code and is not in any figure here.
+- **Whether `local` runs.** Same as before: nothing has been executed. `local` still
+  carries the eleven `os.*` call sites of S6 and the stub driver of S2.
+- **A real package split.** Finding 13 measures omission, not `internal/`.
+- **Wails.** Out of scope, and the numbers here say nothing about it — a native binary
+  pays none of this.
