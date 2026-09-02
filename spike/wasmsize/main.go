@@ -85,6 +85,9 @@ type stage struct {
 	what    string
 	seeds   []string // root files; nil means "shim only"; []string{"*"} means every root file
 	compile []string // extra files to compile but NOT hold reachable; "*" means all
+	cuts    []string // declarations to delete from the copies, as file.go:Name
+	graft   string   // a file under spike/wasmsize/graft/, copied only for this stage
+	provide []string // names the graft supplies, so the closure stops looking for them
 }
 
 // The four stages the spike was dispatched with, plus `all` as the upper bound.
@@ -92,50 +95,85 @@ type stage struct {
 // prints — `refined` there — so "the model" and "the view layer" mean the same
 // files in both documents.
 var stages = []stage{
-	{"floor", "Go runtime + net/http + database/sql + the gosw service-worker bridge. No sheetstream code.", nil, nil},
-	{"model", "+ the pure model: grid, bandkey, formula, pxnum, style. The parts with no I/O.", []string{
-		"grid.go", "bandkey.go", "formula.go", "pxnum.go", "style.go",
-	}, nil},
-	{"view", "+ render and the view layer: render, keys, formulabar, anchor, assets, window, rowheight.", []string{
-		"grid.go", "bandkey.go", "formula.go", "pxnum.go", "style.go",
-		"render.go", "keys.go", "formulabar.go", "anchor.go", "assets.go", "window.go", "rowheight.go",
-	}, nil},
-	{"store", "+ the store and the actor, against the stub driver: store*, mutate, recalc, actor, editlog.", []string{
-		"grid.go", "bandkey.go", "formula.go", "pxnum.go", "style.go",
-		"render.go", "keys.go", "formulabar.go", "anchor.go", "assets.go", "window.go", "rowheight.go",
-		"store.go", "storeread.go", "storewrite.go", "storecache.go", "storeseed.go",
-		"mutate.go", "recalc.go", "actor.go", "editlog.go",
-	}, nil},
+	{name: "floor", what: "Go runtime + net/http + database/sql + the gosw service-worker bridge. No sheetstream code."},
+	{name: "model", what: "+ the pure model: grid, bandkey, formula, pxnum, style. The parts with no I/O.", seeds: modelFiles},
+	{name: "view", what: "+ render and the view layer: render, keys, formulabar, anchor, assets, window, rowheight.",
+		seeds: append(modelFiles, "render.go", "keys.go", "formulabar.go", "anchor.go", "assets.go", "window.go", "rowheight.go")},
+	{name: "store", what: "+ the store and the actor, against the stub driver: store*, mutate, recalc, actor, editlog.",
+		seeds: append(modelFiles, "render.go", "keys.go", "formulabar.go", "anchor.go", "assets.go", "window.go", "rowheight.go",
+			"store.go", "storeread.go", "storewrite.go", "storecache.go", "storeseed.go",
+			"mutate.go", "recalc.go", "actor.go", "editlog.go")},
 	// ARCHITECTURE.md's `sheet` domain exactly, as spike/layout's `refined`
 	// grouping defines it, plus the four files the store.go split produced.
-	// This is what the backlog entry means by "the model", and the one stage
-	// that isolates cleanly once -cut removes the obs -> live edge.
-	{"sheet", "ARCHITECTURE.md's `sheet` domain: the model, the store, recalc, the actor, the edit log.", []string{
+	{name: "sheet", what: "ARCHITECTURE.md's `sheet` domain: the model, the store, recalc, the actor, the edit log.", seeds: []string{
 		"grid.go", "bandkey.go", "formula.go", "style.go", "rowheight.go", "editlog.go", "actor.go",
 		"store.go", "storeread.go", "storewrite.go", "storecache.go", "storeseed.go",
 		"mutate.go", "recalc.go",
-	}, nil},
-	// The stand-in the backlog entry actually describes: everything still
-	// reachable except its drop list — bus/registry/presence (the embedded
-	// NATS server: nobody to fan out to), limits/reaper/readonly/headers
-	// (open-internet policy for a shared demo), index.go (no index page),
-	// analyze.go (the trace reader) and main.go (the stand-in has its own boot).
-	// Routing, rendering, the store and the SSE push all stay.
-	{"standin", "the drop list from the backlog entry applied: no bus/registry/presence, no limits/reaper/readonly/headers, no index or boot.", []string{
-		"grid.go", "bandkey.go", "formula.go", "pxnum.go", "style.go", "rowheight.go",
-		"editlog.go", "actor.go", "mutate.go", "recalc.go",
-		"store.go", "storeread.go", "storewrite.go", "storecache.go", "storeseed.go",
-		"render.go", "keys.go", "formulabar.go", "anchor.go", "assets.go", "window.go",
-		"screen.go", "push.go", "windowcache.go",
-		"http.go", "structure.go", "rangeops.go", "styleui.go", "growrows.go", "latency.go",
-		"otel.go", "logging.go",
-	}, nil},
-	{"all", "every non-test file in the repo root, including bus/registry/presence (embedded NATS) and otel.", []string{"*"}, nil},
+	}},
+	// The stand-in the backlog entry describes: everything still reachable
+	// except its drop list. Routing, rendering, the store and the SSE push all
+	// stay. NOTE finding 10: dropping those files from the REACH set does not
+	// drop them from the BUILD, and NATS is in this binary.
+	{name: "standin", what: "the drop list from the backlog entry applied: no bus/registry/presence, no limits/reaper/readonly/headers, no index or boot.",
+		seeds: standinFiles},
+	{name: "all", what: "every non-test file in the repo root, including bus/registry/presence (embedded NATS) and otel.", seeds: []string{"*"}},
 	// The control. Every file compiled, nothing held reachable: what the
-	// package-level var initialisers and init() functions cost on their own,
-	// before any domain has been asked for. Every stage above pays this.
-	{"inits", "all 43 files compiled, nothing held reachable — the cost of package initialisation alone.", nil, []string{"*"}},
+	// package-level var initialisers and init() functions cost on their own.
+	{name: "inits", what: "all 43 files compiled, nothing held reachable — the cost of package initialisation alone.", compile: []string{"*"}},
+
+	// ─── The minimal local stand-in ───────────────────────────────────────────
+	//
+	// The three edges SPIKE-LAYOUT.md already calls cheap, actually cut, so the
+	// sheet domain compiles without the realtime layer. `bus.go` is then not in
+	// the build at all, so nats-server is not in the module graph — which is the
+	// difference between "unreachable" and "absent" that finding 10 turns on.
+	{name: "local", what: "the smallest thing that can own a forked sheet: sheet + store + actor + recalc, the gosw bridge, no view layer, no NATS in the build.",
+		seeds: localFiles, cuts: relocations, graft: "relocated.go.txt", provide: relocated},
+	{name: "local-ro", what: "local, read path only: no mutate, no recalc, no actor, no seed, no write.",
+		seeds: localReadFiles, compile: localFiles, cuts: relocations, graft: "relocated.go.txt", provide: relocated},
+	{name: "local-inits", what: "the local file set compiled, nothing reachable — how much of the init cost the split recovers.",
+		compile: localFiles, cuts: relocations, graft: "relocated.go.txt", provide: relocated},
+	{name: "local-nosdk", what: "local with StartTracing cut: does dropping the one call site take the otel SDK out?",
+		seeds: localFiles, cuts: append(relocations, "otel.go:StartTracing"), graft: "relocated.go.txt", provide: relocated},
 }
+
+var modelFiles = []string{"grid.go", "bandkey.go", "formula.go", "pxnum.go", "style.go"}
+
+var standinFiles = []string{
+	"grid.go", "bandkey.go", "formula.go", "pxnum.go", "style.go", "rowheight.go",
+	"editlog.go", "actor.go", "mutate.go", "recalc.go",
+	"store.go", "storeread.go", "storewrite.go", "storecache.go", "storeseed.go",
+	"render.go", "keys.go", "formulabar.go", "anchor.go", "assets.go", "window.go",
+	"screen.go", "push.go", "windowcache.go",
+	"http.go", "structure.go", "rangeops.go", "styleui.go", "growrows.go", "latency.go",
+	"otel.go", "logging.go",
+}
+
+// localFiles is the sheet domain, whole: the model, the store, the actor, the
+// mutation and recalculation paths, and the edit log.
+var localFiles = []string{
+	"grid.go", "bandkey.go", "formula.go", "pxnum.go", "style.go", "rowheight.go",
+	"editlog.go", "actor.go", "mutate.go", "recalc.go",
+	"store.go", "storeread.go", "storewrite.go", "storecache.go", "storeseed.go",
+}
+
+// localReadFiles is the read path: open a sheet, read a window, read styles.
+// Everything else is compiled but not anchored, so the linker decides.
+var localReadFiles = []string{
+	"grid.go", "bandkey.go", "formula.go", "pxnum.go", "style.go", "rowheight.go",
+	"store.go", "storeread.go", "storecache.go",
+}
+
+// relocations performs, on the copies, the three moves SPIKE-LAYOUT.md lists
+// under "what was not done, and should be decided". shim/relocated.go supplies
+// the declarations on the side they belong on.
+var relocations = []string{
+	"otel.go:connAttrs",     // the obs -> live edge: `screenObs` knows what a `screen` is
+	"render.go:rowHeightPx", // the sheet -> view edge: a layout constant filed in the renderer
+	"window.go:rowRange",    // the sheet -> view edge: the window range type
+}
+
+var relocated = []string{"connAttrs", "rowHeightPx", "rowRange"}
 
 func stageNames() string {
 	n := make([]string, len(stages))
@@ -245,13 +283,18 @@ func run(root string, idx *rootIndex, st stage) (result, error) {
 		set[f] = true
 	}
 
+	provided := map[string]bool{}
+	for _, n := range st.provide {
+		provided[n] = true
+	}
+
 	var lastErr string
 	for iter := 0; iter < *maxIters; iter++ {
 		// Compile everything the closure demands, but hold only the SEED files
 		// reachable. The linker's dead-code elimination then decides how much of
 		// the rest this domain actually reaches — which is the number a
 		// stand-in would pay, rather than the number a compiler forces.
-		reach, err := assemble(root, idx, dir, set, seeds)
+		reach, err := assemble(root, idx, st, dir, set, seeds)
 		if err != nil {
 			return result{}, err
 		}
@@ -267,7 +310,7 @@ func run(root string, idx *rootIndex, st stage) (result, error) {
 			}, nil
 		}
 		lastErr = out
-		missing := idx.resolve(out)
+		missing := idx.resolve(out, provided)
 		if *why {
 			for _, r := range idx.reasons(out) {
 				fmt.Printf("  [%s why] %-46s pulls in %s\n", st.name, r.where, r.file)
@@ -289,7 +332,7 @@ func run(root string, idx *rootIndex, st stage) (result, error) {
 // assemble writes the scratch module: go.mod, go.sum, the shim, the chosen root
 // files, and the generated reachability root. It returns how many functions and
 // methods that root holds live.
-func assemble(root string, idx *rootIndex, dir string, set map[string]bool, reachFiles []string) (int, error) {
+func assemble(root string, idx *rootIndex, st stage, dir string, set map[string]bool, reachFiles []string) (int, error) {
 	for _, old := range globAll(dir, "*.go") {
 		if err := os.Remove(old); err != nil {
 			return 0, err
@@ -325,6 +368,14 @@ func assemble(root string, idx *rootIndex, dir string, set map[string]bool, reac
 		}
 	}
 
+	if st.graft != "" {
+		src := filepath.Join(root, "spike", "wasmsize", "graft", st.graft)
+		dst := filepath.Join(dir, strings.TrimSuffix(st.graft, ".txt"))
+		if err := copyFile(src, dst); err != nil {
+			return 0, err
+		}
+	}
+
 	var files []string
 	for f := range set {
 		files = append(files, f)
@@ -336,7 +387,7 @@ func assemble(root string, idx *rootIndex, dir string, set map[string]bool, reac
 		if err != nil {
 			return 0, err
 		}
-		b = patch(f, b)
+		b = patch(st, f, b)
 		if err := os.WriteFile(filepath.Join(dir, f), b, 0o644); err != nil {
 			return 0, err
 		}
@@ -356,9 +407,9 @@ func assemble(root string, idx *rootIndex, dir string, set map[string]bool, reac
 
 // cutSet is -cut parsed: file -> declaration names to delete from that file's
 // copy. Nothing in the repo is touched; only the scratch copy loses them.
-func cutSet() map[string]map[string]bool {
+func cutSet(extra []string) map[string]map[string]bool {
 	m := map[string]map[string]bool{}
-	for _, spec := range strings.Split(*cut, ",") {
+	for _, spec := range append(strings.Split(*cut, ","), extra...) {
 		spec = strings.TrimSpace(spec)
 		if spec == "" {
 			continue
@@ -386,12 +437,50 @@ func cutDecls(src []byte, names map[string]bool) ([]byte, error) {
 	}
 	var keep []ast.Decl
 	for _, d := range f.Decls {
-		if fd, ok := d.(*ast.FuncDecl); ok && names[fd.Name.Name] {
+		if fd, ok := d.(*ast.FuncDecl); ok {
+			if names[fd.Name.Name] {
+				continue
+			}
+			// A method on a cut type has to go with it.
+			if recv, _, _ := recvType(fd.Recv); recv != "" && names[recv] {
+				continue
+			}
+			keep = append(keep, d)
 			continue
 		}
-		keep = append(keep, d)
+		gd, ok := d.(*ast.GenDecl)
+		if !ok {
+			keep = append(keep, d)
+			continue
+		}
+		var specs []ast.Spec
+		for _, sp := range gd.Specs {
+			switch sp := sp.(type) {
+			case *ast.TypeSpec:
+				if names[sp.Name.Name] {
+					continue
+				}
+			case *ast.ValueSpec:
+				drop := false
+				for _, id := range sp.Names {
+					if names[id.Name] {
+						drop = true
+					}
+				}
+				if drop {
+					continue
+				}
+			}
+			specs = append(specs, sp)
+		}
+		if len(specs) == 0 && len(gd.Specs) > 0 {
+			continue
+		}
+		gd.Specs = specs
+		keep = append(keep, gd)
 	}
 	f.Decls = keep
+	pruneImports(f)
 	var out bytes.Buffer
 	if err := printer.Fprint(&out, fset, f); err != nil {
 		return nil, err
@@ -399,9 +488,55 @@ func cutDecls(src []byte, names map[string]bool) ([]byte, error) {
 	return out.Bytes(), nil
 }
 
+// pruneImports drops imports no surviving declaration qualifies against. Cutting
+// a function is not a source edit a compiler will accept on its own — Go rejects
+// an unused import — so this is the second half of "delete this function", and
+// the set it removes is itself a finding: see the otel SDK in finding 13.
+func pruneImports(f *ast.File) {
+	used := map[string]bool{}
+	ast.Inspect(f, func(n ast.Node) bool {
+		sel, ok := n.(*ast.SelectorExpr)
+		if !ok {
+			return true
+		}
+		if id, ok := sel.X.(*ast.Ident); ok {
+			used[id.Name] = true
+		}
+		return true
+	})
+	var keep []ast.Decl
+	for _, d := range f.Decls {
+		gd, ok := d.(*ast.GenDecl)
+		if !ok || gd.Tok != token.IMPORT {
+			keep = append(keep, d)
+			continue
+		}
+		var specs []ast.Spec
+		for _, sp := range gd.Specs {
+			im := sp.(*ast.ImportSpec)
+			name := ""
+			if im.Name != nil {
+				name = im.Name.Name
+			} else {
+				path := strings.Trim(im.Path.Value, `"`)
+				name = path[strings.LastIndexByte(path, '/')+1:]
+			}
+			if name == "_" || name == "." || used[name] {
+				specs = append(specs, sp)
+			}
+		}
+		if len(specs) == 0 {
+			continue
+		}
+		gd.Specs = specs
+		keep = append(keep, gd)
+	}
+	f.Decls = keep
+}
+
 // patch applies the rewrites this measurement needs to the copied root files.
 // All of them are recorded in SPIKE-WASM-STANDIN.md; nothing else is touched.
-func patch(name string, b []byte) []byte {
+func patch(st stage, name string, b []byte) []byte {
 	// 1. modernc.org/sqlite does not build for GOOS=js or GOOS=wasip1. The blank
 	//    import appears in five files (store.go and the four the SPIKE-LAYOUT
 	//    split produced); shim/sqlstub.go registers "sqlite" instead.
@@ -412,7 +547,7 @@ func patch(name string, b []byte) []byte {
 		b = bytes.Replace(b, []byte("\nfunc main() {"), []byte("\nfunc swRootMain() {"), 1)
 	}
 	// 3. -cut, if asked: delete named declarations so one reference can be priced.
-	if names := cutSet()[name]; len(names) > 0 {
+	if names := cutSet(st.cuts)[name]; len(names) > 0 {
 		out, err := cutDecls(b, names)
 		if err != nil {
 			fatal(fmt.Errorf("cut %s: %w", name, err))
@@ -590,14 +725,20 @@ var (
 
 // resolve turns a build failure into the set of root files that would supply
 // what it says is missing.
-func (x *rootIndex) resolve(out string) []string {
+func (x *rootIndex) resolve(out string, provided map[string]bool) []string {
 	add := map[string]bool{}
 	for _, m := range reUndef.FindAllStringSubmatch(out, -1) {
+		if provided[m[1]] {
+			continue
+		}
 		if f, ok := x.decl[m[1]]; ok {
 			add[f] = true
 		}
 	}
 	for _, m := range reNoMeth.FindAllStringSubmatch(out, -1) {
+		if provided[m[1]] || provided[m[2]] {
+			continue
+		}
 		if f, ok := x.qmeth[m[1]+"."+m[2]]; ok {
 			add[f] = true
 			continue
@@ -700,7 +841,7 @@ func runSynthetic(root string, idx *rootIndex, name, imp, use string) (result, e
 		return result{}, err
 	}
 	defer os.RemoveAll(dir)
-	if _, err := assemble(root, idx, dir, map[string]bool{}, nil); err != nil {
+	if _, err := assemble(root, idx, stage{}, dir, map[string]bool{}, nil); err != nil {
 		return result{}, err
 	}
 	if imp != "" {
