@@ -1,0 +1,104 @@
+//go:build js && wasm
+
+// Taken from ../sw-datastar-sync-archive/gosw/cmd/app/bridge.go: the JS
+// Request <-> *http.Request <-> JS Response conversion a service worker needs,
+// because GOOS=js has no net.Listen and http.Handler never needed a socket.
+// Identifiers are prefixed `sw` to keep the namespace clear of the repo root's.
+
+package main
+
+import (
+	"bytes"
+	"fmt"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"syscall/js"
+)
+
+// swToGoRequest converts a JS Request (as handed to a service worker's fetch
+// event) into an *http.Request. Must run on a goroutine: it awaits
+// request.arrayBuffer().
+func swToGoRequest(jsReq js.Value) (*http.Request, error) {
+	method := jsReq.Get("method").String()
+	url := jsReq.Get("url").String()
+
+	var body io.Reader = http.NoBody
+	var contentLength int64
+	if method != http.MethodGet && method != http.MethodHead {
+		buf, err := swAwait(jsReq.Call("arrayBuffer"))
+		if err != nil {
+			return nil, fmt.Errorf("read request body: %w", err)
+		}
+		b := swBytesFromArrayBuffer(buf)
+		contentLength = int64(len(b))
+		body = bytes.NewReader(b)
+	}
+
+	req, err := http.NewRequest(method, url, body)
+	if err != nil {
+		return nil, err
+	}
+	req.ContentLength = contentLength
+	req.RequestURI = req.URL.RequestURI()
+	req.RemoteAddr = "service-worker"
+	req.Host = req.URL.Host
+
+	each := js.FuncOf(func(_ js.Value, args []js.Value) any {
+		req.Header.Add(args[1].String(), args[0].String()) // forEach(value, key, parent)
+		return nil
+	})
+	jsReq.Get("headers").Call("forEach", each)
+	each.Release()
+
+	return req, nil
+}
+
+// swToJSResponse builds a JS Response from a fully buffered Go response.
+func swToJSResponse(res *http.Response) js.Value {
+	var body []byte
+	if res.Body != nil {
+		body, _ = io.ReadAll(res.Body)
+		res.Body.Close()
+	}
+
+	init := swObject.New()
+	init.Set("status", res.StatusCode)
+	init.Set("statusText", http.StatusText(res.StatusCode))
+	init.Set("headers", swToJSHeaders(res.Header))
+
+	var jsBody any = js.Null()
+	if len(body) > 0 && res.StatusCode != http.StatusNoContent &&
+		res.StatusCode != http.StatusResetContent && res.StatusCode != http.StatusNotModified {
+		jsBody = swToUint8Array(body)
+	}
+	return swResponse.New(jsBody, init)
+}
+
+func swToJSHeaders(h http.Header) js.Value {
+	hdrs := swHeaders.New()
+	for k, vs := range h {
+		for _, v := range vs {
+			hdrs.Call("append", k, v)
+		}
+	}
+	return hdrs
+}
+
+// swServeBuffered runs the handler against a recorder and resolves with the
+// complete response.
+func swServeBuffered(h http.Handler, req *http.Request) js.Value {
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	return swToJSResponse(rec.Result())
+}
+
+func swErrorResponse(status int, err error) js.Value {
+	init := swObject.New()
+	init.Set("status", status)
+	init.Set("statusText", http.StatusText(status))
+	hdrs := swHeaders.New()
+	hdrs.Call("append", "Content-Type", "text/plain; charset=utf-8")
+	init.Set("headers", hdrs)
+	return swResponse.New(swToUint8Array([]byte(err.Error())), init)
+}

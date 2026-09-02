@@ -1,0 +1,144 @@
+//go:build js && wasm
+
+// Taken from ../sw-datastar-sync-archive/gosw/cmd/app/stream.go: an
+// http.ResponseWriter + http.Flusher whose body is a live JS ReadableStream.
+// This is the piece that makes SSE survive the move into a service worker, and
+// gosw measured it streaming genuinely incrementally. It is included in every
+// stage of this measurement so the floor is comparable with gosw's 6.01 MB.
+
+package main
+
+import (
+	"errors"
+	"net/http"
+	"sync"
+	"syscall/js"
+)
+
+var (
+	swErrClientGone   = errors.New("standin: client canceled the response stream")
+	swErrStreamClosed = errors.New("standin: response stream already closed")
+)
+
+type swStreamWriter struct {
+	hdr    http.Header
+	status int
+
+	ctrl     js.Value // ReadableStreamDefaultController
+	body     js.Value // ReadableStream
+	cancelFn js.Func  // released in swClose
+
+	respond  func(js.Value)
+	once     sync.Once
+	wrote    bool
+	closed   bool
+	canceled bool
+	mu       sync.Mutex
+}
+
+var (
+	_ http.ResponseWriter = (*swStreamWriter)(nil)
+	_ http.Flusher        = (*swStreamWriter)(nil)
+)
+
+func swNewStreamWriter(respond func(js.Value), onCancel func()) *swStreamWriter {
+	w := &swStreamWriter{hdr: http.Header{}, status: http.StatusOK, respond: respond}
+
+	ctrlCh := make(chan js.Value, 1)
+	start := js.FuncOf(func(_ js.Value, args []js.Value) any {
+		ctrlCh <- args[0]
+		return nil
+	})
+	defer start.Release()
+
+	cancel := js.FuncOf(func(_ js.Value, _ []js.Value) any {
+		w.mu.Lock()
+		w.canceled = true
+		w.mu.Unlock()
+		if onCancel != nil {
+			onCancel()
+		}
+		return nil
+	})
+	// cancel must outlive construction; it is released in swClose.
+
+	src := swObject.New()
+	src.Set("start", start)
+	src.Set("cancel", cancel)
+
+	w.body = swStream.New(src)
+	w.ctrl = <-ctrlCh
+	w.cancelFn = cancel
+	return w
+}
+
+func (w *swStreamWriter) Header() http.Header { return w.hdr }
+
+func (w *swStreamWriter) WriteHeader(status int) {
+	w.mu.Lock()
+	if w.wrote {
+		w.mu.Unlock()
+		return
+	}
+	w.wrote = true
+	w.status = status
+	hdr := w.hdr.Clone()
+	w.mu.Unlock()
+
+	init := swObject.New()
+	init.Set("status", status)
+	init.Set("statusText", http.StatusText(status))
+	init.Set("headers", swToJSHeaders(hdr))
+	resp := swResponse.New(w.body, init)
+	w.once.Do(func() { w.respond(resp) })
+}
+
+func (w *swStreamWriter) Write(p []byte) (int, error) {
+	if !w.swHeaderWritten() {
+		w.WriteHeader(http.StatusOK)
+	}
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.closed {
+		return 0, swErrStreamClosed
+	}
+	if w.canceled {
+		return 0, swErrClientGone
+	}
+	if len(p) == 0 {
+		return 0, nil
+	}
+	w.ctrl.Call("enqueue", swToUint8Array(p))
+	return len(p), nil
+}
+
+func (w *swStreamWriter) Flush() {
+	if !w.swHeaderWritten() {
+		w.WriteHeader(http.StatusOK)
+	}
+}
+
+func (w *swStreamWriter) swHeaderWritten() bool {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.wrote
+}
+
+func (w *swStreamWriter) swClose() {
+	if !w.swHeaderWritten() {
+		w.WriteHeader(http.StatusOK)
+	}
+	w.mu.Lock()
+	if w.closed {
+		w.mu.Unlock()
+		return
+	}
+	w.closed = true
+	canceled := w.canceled
+	w.mu.Unlock()
+
+	if !canceled {
+		w.ctrl.Call("close")
+	}
+	w.cancelFn.Release()
+}
