@@ -123,7 +123,7 @@ bad derivative.
 
 ## Finding 3 — the whole repo compiles for js/wasm today, and the backward edges are not the obstacle
 
-The dispatch expected getting sheetstream's real code to compile for `GOOS=js` to be the
+The dispatch expected getting hypersheets's real code to compile for `GOOS=js` to be the
 hard part, because of the `web` ↔ `view` backward edges. It is not hard at all:
 
     GOOS=js GOARCH=wasm go build .   ->   succeeds, after deleting five blank imports
@@ -589,7 +589,7 @@ gate is roughly where the entry thought it was.
 
 ## Finding 14 — the otel SDK is removable for one function; the otel API is not removable at all
 
-`otel.go:55` is `var tracer trace.Tracer = noop.NewTracerProvider().Tracer("sheetstream")`,
+`otel.go:55` is `var tracer trace.Tracer = noop.NewTracerProvider().Tracer("hypersheets")`,
 and `StartTracing` is the **only** function in the repository that touches
 `sdktrace`, `stdouttrace` or `resource`. Cutting it leaves six imports unused — the
 compiler says so, which is itself the proof:

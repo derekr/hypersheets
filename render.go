@@ -1639,7 +1639,7 @@ func pageShellWidths(sheetID string, loRow, hiRow int, grid string, at anchor, w
 	b.Grow(len(grid) + len(gridCSS) + 3072)
 	b.WriteString(`<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">`)
 	b.WriteString(`<meta name="viewport" content="width=device-width,initial-scale=1">`)
-	b.WriteString(`<title>sheetstream · `)
+	b.WriteString(`<title>hypersheets · `)
 	b.WriteString(esc)
 	// An inline data: icon, so no browser ever asks for /favicon.ico and gets a
 	// 404 in the console of a page whose whole point is being inspected.
@@ -1752,7 +1752,7 @@ func pageShellWidths(sheetID string, loRow, hiRow int, grid string, at anchor, w
 	b.WriteString(colWidthSignals(widths))
 	b.WriteString(`}">`)
 
-	b.WriteString(`<header><b><a class="h" href="/">sheetstream</a></b><span class="m">`)
+	b.WriteString(`<header><b><a class="h" href="/">hypersheets</a></b><span class="m">`)
 	b.WriteString(esc)
 	b.WriteString(`</span>`)
 	// Says the sheet is fixed before anything is refused. See readonly.go.

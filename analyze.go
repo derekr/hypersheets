@@ -2,7 +2,7 @@ package main
 
 // analyze.go — read the trace file back.
 //
-//	sheetstream -analyze trace.jsonl
+//	hypersheets -analyze trace.jsonl
 //
 // The exporter writes one JSON object per span per line. That is a fine wire
 // format and an awful thing to read, so this turns it into three tables:

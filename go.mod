@@ -1,4 +1,4 @@
-module github.com/derekr/sheetstream
+module github.com/derekr/hypersheets
 
 go 1.26.1
 

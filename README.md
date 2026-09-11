@@ -1,4 +1,4 @@
-# sheetstream
+# hypersheets
 
 A realtime multiplayer spreadsheet with no client-side application state.
 
@@ -98,7 +98,7 @@ few days of plumbing on a working prototype, for no reader's benefit.
 ## Running it
 
 ```
-go build -o /tmp/sheetstream . && /tmp/sheetstream -addr :8090 -data /tmp/ss
+go build -o /tmp/hypersheets . && /tmp/hypersheets -addr :8090 -data /tmp/ss
 ```
 
 Then open http://localhost:8090. `-seed-rows 10000` fills a sheet with 10,000 × 26

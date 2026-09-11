@@ -1,4 +1,4 @@
-# sheetstream — a realtime spreadsheet on hypermedia + light client state
+# hypersheets — a realtime spreadsheet on hypermedia + light client state
 
 A prototype to test one hypothesis:
 

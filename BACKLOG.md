@@ -377,7 +377,7 @@ measured rather than estimated, so nobody has to re-derive it.
 | AARNet (Sydney / Canberra) | **136 ms** |
 | iiNet, Internode (Perth, Adelaide) | **201 ms** |
 | kernel.org (US) | 32 ms |
-| sheetstream's own work | **~1 ms** (p50 render 0.35 ms, edit 0.96 ms) |
+| hypersheets's own work | **~1 ms** (p50 render 0.35 ms, edit 0.96 ms) |
 
 So ~99% of an Australian tester's felt delay is the Pacific, and every commit,
 selection and buffer-edge scroll pays it once. This is the number the tooltip is
@@ -397,7 +397,7 @@ dirs, systemd unit, logrotate, binary — and there is no provisioning script an
 in this repo. Cloning that by hand means the two boxes drift immediately and every
 later region is another hand-build. What is needed first is `deploy/`: `provision.sh`
 (usable as exe.dev's `--setup-script`, so a region provisions at VM creation),
-`sheetstream.service`, `logrotate.conf`, `push.sh <host...>` (cross-compile once,
+`hypersheets.service`, `logrotate.conf`, `push.sh <host...>` (cross-compile once,
 install to N), and the logo-seeding script, which we now want on every region.
 
 The app itself is trivially portable: **total state is 2.8 MB of sheets + 34 MB of

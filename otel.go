@@ -52,7 +52,7 @@ import (
 // SetTracerProvider leaves already-handed-out tracers pointing at the first
 // provider and silently writes the second run's spans into the first run's file.
 // Owning the handle here makes StartTracing idempotent.
-var tracer trace.Tracer = noop.NewTracerProvider().Tracer("sheetstream")
+var tracer trace.Tracer = noop.NewTracerProvider().Tracer("hypersheets")
 
 // StartTracing points the global tracer provider at a JSON-lines file. An empty
 // path disables tracing and returns a no-op shutdown, so `-trace-file=` is a
@@ -84,10 +84,10 @@ func StartTracing(path string) (shutdown func(context.Context) error, err error)
 			sdktrace.WithBatchTimeout(500*time.Millisecond),
 		),
 		sdktrace.WithResource(resource.NewSchemaless(
-			attribute.String("service.name", "sheetstream"),
+			attribute.String("service.name", "hypersheets"),
 		)),
 	)
-	tracer = tp.Tracer("sheetstream")
+	tracer = tp.Tracer("hypersheets")
 	otel.SetTracerProvider(tp)
 	return func(ctx context.Context) error {
 		// tracer is deliberately NOT reassigned here. It is written once at

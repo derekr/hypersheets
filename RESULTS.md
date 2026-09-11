@@ -1,9 +1,9 @@
-# sheetstream — measured results
+# hypersheets — measured results
 
 Prototype status: **both hard parts work.** The thesis survives, with one concrete
 change required before this scales past a handful of viewers.
 
-Run: `go build -o /tmp/sheetstream . && /tmp/sheetstream -addr :8090 -data /tmp/ss`
+Run: `go build -o /tmp/hypersheets . && /tmp/hypersheets -addr :8090 -data /tmp/ss`
 Seeds 10,000 x 26 (220,404 cells, 40,513 dep edges, 5.4 MB) in ~750ms.
 
 ## Hard part 1 — scrolling is cheap. CONFIRMED.

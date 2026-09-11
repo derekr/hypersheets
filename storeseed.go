@@ -446,7 +446,7 @@ func NewSheetID() string {
 	out := make([]byte, 0, sheetIDLen)
 	for len(out) < sheetIDLen {
 		if _, err := rand.Read(buf); err != nil {
-			panic("sheetstream: crypto/rand failed: " + err.Error())
+			panic("hypersheets: crypto/rand failed: " + err.Error())
 		}
 		for _, b := range buf {
 			if len(out) == sheetIDLen {

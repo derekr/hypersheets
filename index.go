@@ -60,10 +60,10 @@ func (s *Server) handleRoot(w http.ResponseWriter, r *http.Request) {
 	b.Grow(2048 + len(sheets)*160)
 	b.WriteString(`<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">`)
 	b.WriteString(`<meta name="viewport" content="width=device-width,initial-scale=1">`)
-	b.WriteString(`<title>sheetstream</title><link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' fill='%23fff'/%3E%3Cpath d='M0 5h16M0 10h16M5 0v16M10 0v16' stroke='%23cdd5e2'/%3E%3Crect x='5' y='5' width='5' height='5' fill='%233b5e8b'/%3E%3C/svg%3E"><style>`)
+	b.WriteString(`<title>hypersheets</title><link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' fill='%23fff'/%3E%3Cpath d='M0 5h16M0 10h16M5 0v16M10 0v16' stroke='%23cdd5e2'/%3E%3Crect x='5' y='5' width='5' height='5' fill='%233b5e8b'/%3E%3C/svg%3E"><style>`)
 	b.WriteString(indexCSS)
 	b.WriteString(`</style></head><body><main>`)
-	b.WriteString(`<h1>sheetstream</h1><p class="sub">`)
+	b.WriteString(`<h1>hypersheets</h1><p class="sub">`)
 	b.WriteString(strconv.Itoa(len(sheets)))
 	b.WriteString(` sheet`)
 	if len(sheets) != 1 {

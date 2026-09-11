@@ -48,7 +48,7 @@ var (
 	seedRows = flag.Int("seed-rows", 500, "rows to seed with data when creating the sheet (the grid starts DefaultRows tall and grows)")
 
 	traceFile = flag.String("trace-file", "trace.jsonl", "OpenTelemetry spans as JSON lines. Empty disables tracing.")
-	logFile   = flag.String("log-file", "sheetstream.log", "structured JSON log destination. Empty logs to stderr.")
+	logFile   = flag.String("log-file", "hypersheets.log", "structured JSON log destination. Empty logs to stderr.")
 	analyze   = flag.String("analyze", "", "read a trace file, print a p50/p95 table per span plus byte stats, and exit. Starts no server.")
 
 	// Abuse limits. The policy and the reasoning behind every number live in

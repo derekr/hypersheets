@@ -177,7 +177,7 @@ func main() {
 		Importer: importer.ForCompiler(fset, "gc", nil),
 		Error:    func(error) {},
 	}
-	pkg, err := conf.Check("sheetstream", fset, parsed, info)
+	pkg, err := conf.Check("hypersheets", fset, parsed, info)
 	if err != nil && *strict {
 		fatal(err)
 	}

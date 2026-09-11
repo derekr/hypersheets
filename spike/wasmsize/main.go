@@ -95,7 +95,7 @@ type stage struct {
 // prints — `refined` there — so "the model" and "the view layer" mean the same
 // files in both documents.
 var stages = []stage{
-	{name: "floor", what: "Go runtime + net/http + database/sql + the gosw service-worker bridge. No sheetstream code."},
+	{name: "floor", what: "Go runtime + net/http + database/sql + the gosw service-worker bridge. No hypersheets code."},
 	{name: "model", what: "+ the pure model: grid, bandkey, formula, pxnum, style. The parts with no I/O.", seeds: modelFiles},
 	{name: "view", what: "+ render and the view layer: render, keys, formulabar, anchor, assets, window, rowheight.",
 		seeds: append(modelFiles, "render.go", "keys.go", "formulabar.go", "anchor.go", "assets.go", "window.go", "rowheight.go")},
@@ -924,7 +924,7 @@ func report(rs []result) {
 	fmt.Println("for comparison:")
 	fmt.Println("  gosw bare net/http handler (Go 1.26.1, same flags)   6.01 MB raw   1.68 MB gzip")
 	fmt.Println("  ../hypermedia-sw-demo sqlite3.wasm                                  848 KB")
-	fmt.Println("  sheetstream first visit today                                      27.9 KB")
+	fmt.Println("  hypersheets first visit today                                      27.9 KB")
 }
 
 func mb(n int) string {

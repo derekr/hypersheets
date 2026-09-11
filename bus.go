@@ -126,12 +126,12 @@ func StartBus(opts BusOptions) (*Bus, error) {
 		return nil, fmt.Errorf("nats server not ready after 5s")
 	}
 
-	nc, err := nats.Connect("", nats.InProcessServer(ns), nats.Name("sheetstream"))
+	nc, err := nats.Connect("", nats.InProcessServer(ns), nats.Name("hypersheets"))
 	if err != nil {
 		ns.Shutdown()
 		return nil, fmt.Errorf("nats connect (in-process): %w", err)
 	}
-	pc, err := nats.Connect("", nats.InProcessServer(ns), nats.Name("sheetstream-presence"))
+	pc, err := nats.Connect("", nats.InProcessServer(ns), nats.Name("hypersheets-presence"))
 	if err != nil {
 		nc.Close()
 		ns.Shutdown()
