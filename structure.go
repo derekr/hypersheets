@@ -70,12 +70,12 @@ func (s *Server) handleCols(w http.ResponseWriter, r *http.Request) {
 func (s *Server) applyStructural(w http.ResponseWriter, r *http.Request, axis axisKind) {
 	sheetID := r.PathValue("sheetID")
 	if err := validSheetID(sheetID); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		http.Error(w, "bad sheet id", http.StatusBadRequest)
 		return
 	}
 	var sig structSignals
 	if err := datastar.ReadSignals(r, &sig); err != nil {
-		http.Error(w, "read signals: "+err.Error(), http.StatusBadRequest)
+		http.Error(w, "bad request", http.StatusBadRequest)
 		return
 	}
 	// The bound here is the widest the axis could possibly be; the store checks
@@ -201,7 +201,7 @@ func (s *Server) applyStructural(w http.ResponseWriter, r *http.Request, axis ax
 		// chip would simply disappear and the menu would look broken — when in
 		// fact the store refused for a good reason.
 		s.notify(sig.Conn, humanStructError(err, axis, del, appendRows))
-		http.Error(w, err.Error(), status)
+		http.Error(w, commandErrorBody(err, status), status)
 		return
 	}
 

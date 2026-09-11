@@ -406,9 +406,9 @@ an apology for network distance would waste it.
 The tooltip above says the fix is topological. This is what acting on it would cost,
 measured rather than estimated, so nobody has to re-derive it.
 
-**The gap, measured from the LA box (`ping`, 5 packets, min/avg/max):**
+**The gap, measured from the demo box (`ping`, 5 packets, min/avg/max):**
 
-| From the LA box to | RTT |
+| From the demo box to | RTT |
 |---|---|
 | AARNet (Sydney / Canberra) | **136 ms** |
 | iiNet, Internode (Perth, Adelaide) | **201 ms** |
@@ -419,7 +419,9 @@ So ~99% of an Australian tester's felt delay is the Pacific, and every commit,
 selection and buffer-edge scroll pays it once. This is the number the tooltip is
 about; it is not an estimate.
 
-**Regions available on exe.dev:** `lax nyc dal fra tyo syd sgp lon`.
+**Regions on several continents are available from the hosting provider;**
+the exact list lives in the private deploy notes. What matters here is the
+decision, not the menu.
 
 **Shared sheet state across regions is NOT a goal** (stated 2026-08-18). That makes
 this N independent demos rather than a distributed system — one actor and one SQLite
@@ -428,24 +430,25 @@ it. The one consequence to design for: **a link crosses regions even though noth
 else does**, so a SYD sheet opened from the US is slow, and that should be visible in
 the chrome rather than discovered.
 
-**The actual prerequisite is Phase 0, not the VM.** The LA box was hand-built — user,
-dirs, systemd unit, logrotate, binary — and there is no provisioning script anywhere
-in this repo. Cloning that by hand means the two boxes drift immediately and every
-later region is another hand-build. What is needed first is `deploy/`: `provision.sh`
-(usable as exe.dev's `--setup-script`, so a region provisions at VM creation),
-`hypersheets.service`, `logrotate.conf`, `push.sh <host...>` (cross-compile once,
-install to N), and the logo-seeding script, which we now want on every region.
+**The actual prerequisite is Phase 0, not the VM.** The demo box was hand-built — user,
+dirs, service unit, log rotation, binary — and there is no provisioning script anywhere
+in this repo. Cloning that by hand means the boxes drift immediately and every
+later region is another hand-build. What is needed first is a `deploy/` directory kept
+out of this repo: a provisioning script (run at VM creation by the hosting
+provider), a service unit, a logrotate config, a push script (cross-compile once,
+install to N), and the seeding script, which we now want on every region.
 
-The app itself is trivially portable: **total state is 2.8 MB of sheets + 34 MB of
-logs.** The 5.2 GB on the box is the `exeuntu` base image.
+The app itself is trivially portable: **total state is a few megabytes of sheets
+plus tens of megabytes of logs.** The gigabytes on the box are the provider's
+base image.
 
 **The idea worth keeping if this is ever picked up.** Add `GET /ping` (204,
 `Access-Control-Allow-Origin: *`, no-store) and have the index page MEASURE every
 region from the visitor's own browser, show the medians, and point "New sheet" at the
 fastest. ~10 lines of Go and ~60 of JS. It converts the demo's one persistent
 criticism into its best moment: instead of a tooltip *claiming* latency is a
-deployment property, a Sydney visitor reads `Sydney 11 ms · Los Angeles 154 ms` and
-is routed. The claim becomes a measurement the reader takes themselves — which is the
+deployment property, a distant visitor reads e.g. `near region 11 ms · demo region
+154 ms` and is routed. The claim becomes a measurement the reader takes themselves — which is the
 same move the latency chip already makes, applied one level up.
 
 **Constraints that would bite, in the order they would bite:**
@@ -459,9 +462,10 @@ same move the latency chip already makes, applied one level up.
    (`syd-abc123`) so routing is a pure function of the URL. Free now, awkward later.
 3. `-index-reveal` becomes a secret shared across more machines the moment it is in a
    provisioning script. Per-box value, or drop it.
-4. Cloudflare CNAME flattening must stay OFF, the record must be DNS-only, and
-   exe.dev's resolver caches — `domain add` failed for ~10 minutes after the record
-   was already correct, then succeeded unchanged. Budget for that, do not debug it.
+4. DNS flattening must stay OFF where the provider does it, the record must be
+   DNS-only, and provider resolvers cache — adding the domain failed for
+   ~10 minutes after the record was already correct, then succeeded unchanged.
+   Budget for that, do not debug it.
 5. Disk and bandwidth are non-issues at 2.8 MB of state and 51x compression.
 
 ---

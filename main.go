@@ -29,7 +29,7 @@ import (
 var (
 	addr       = flag.String("addr", ":8080", "HTTP listen address")
 	dataDir    = flag.String("data", "data/sheets", "directory holding one SQLite file per sheet")
-	natsListen = flag.String("nats-listen", "", "optional NATS TCP listen address (e.g. :4222) so `nats sub 'sheet.>'` can watch the fan-out. Empty = in-process only.")
+	natsListen = flag.String("nats-listen", "", "optional NATS TCP listen address (e.g. 127.0.0.1:4222) so `nats sub 'sheet.>'` can watch the fan-out. Empty = in-process only. WARNING: the stream carries every sheet's edits with no authentication — bind localhost or firewall it, never expose it publicly.")
 	throttleMs = flag.Int("throttle-ms", 0, "minimum gap between two renders of one connection. 0 disables.")
 	// 4, not 2: at 2 bands the slack is only ~100 rows per side, which a fast
 	// drag outruns, leaving about half of all scroll bursts needing a round trip.

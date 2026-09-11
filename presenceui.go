@@ -107,12 +107,12 @@ type selSignals struct {
 func (s *Server) handleSel(w http.ResponseWriter, r *http.Request) {
 	sheetID := r.PathValue("sheetID")
 	if err := validSheetID(sheetID); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		http.Error(w, "bad sheet id", http.StatusBadRequest)
 		return
 	}
 	var sig selSignals
 	if err := datastar.ReadSignals(r, &sig); err != nil {
-		http.Error(w, "read signals: "+err.Error(), http.StatusBadRequest)
+		http.Error(w, "bad request", http.StatusBadRequest)
 		return
 	}
 
@@ -150,7 +150,7 @@ func (s *Server) handleSel(w http.ResponseWriter, r *http.Request) {
 	}
 	if err != nil {
 		span.RecordError(err)
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		http.Error(w, "bad request", http.StatusBadRequest)
 		return
 	}
 	scr.setAggBig(big)

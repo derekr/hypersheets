@@ -306,12 +306,12 @@ type fillSignals struct {
 func (s *Server) handleFill(w http.ResponseWriter, r *http.Request) {
 	sheetID := r.PathValue("sheetID")
 	if err := validSheetID(sheetID); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		http.Error(w, "bad sheet id", http.StatusBadRequest)
 		return
 	}
 	var sig fillSignals
 	if err := datastar.ReadSignals(r, &sig); err != nil {
-		http.Error(w, "read signals: "+err.Error(), http.StatusBadRequest)
+		http.Error(w, "bad request", http.StatusBadRequest)
 		return
 	}
 	down := sig.Op != "r"
@@ -402,7 +402,8 @@ func (s *Server) handleFill(w http.ResponseWriter, r *http.Request) {
 		obsLog.WarnContext(ctx, "fill.failed",
 			"sheet", sheetID, "conn", sig.Conn, "name", s.authorName(sig.Conn),
 			"range", lo.String()+":"+hi.String(), "op", sig.Op, "err", err.Error())
-		http.Error(w, err.Error(), commandStatus(err))
+		status := commandStatus(err)
+		http.Error(w, commandErrorBody(err, status), status)
 		return
 	}
 
@@ -450,12 +451,12 @@ type pasteSignals struct {
 func (s *Server) handlePaste(w http.ResponseWriter, r *http.Request) {
 	sheetID := r.PathValue("sheetID")
 	if err := validSheetID(sheetID); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		http.Error(w, "bad sheet id", http.StatusBadRequest)
 		return
 	}
 	var sig pasteSignals
 	if err := datastar.ReadSignals(r, &sig); err != nil {
-		http.Error(w, "read signals: "+err.Error(), http.StatusBadRequest)
+		http.Error(w, "bad request", http.StatusBadRequest)
 		return
 	}
 	srcLo, srcHi, err := ParseRangeBounds(sig.Src)
@@ -554,7 +555,8 @@ func (s *Server) handlePaste(w http.ResponseWriter, r *http.Request) {
 		obsLog.WarnContext(ctx, "paste.failed",
 			"sheet", sheetID, "conn", sig.Conn, "name", s.authorName(sig.Conn),
 			"src", srcLo.String()+":"+srcHi.String(), "dst", dst.String(), "err", err.Error())
-		http.Error(w, err.Error(), commandStatus(err))
+		status := commandStatus(err)
+		http.Error(w, commandErrorBody(err, status), status)
 		return
 	}
 

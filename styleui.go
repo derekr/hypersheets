@@ -161,12 +161,12 @@ type styleSignals struct {
 func (s *Server) handleStyle(w http.ResponseWriter, r *http.Request) {
 	sheetID := r.PathValue("sheetID")
 	if err := validSheetID(sheetID); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		http.Error(w, "bad sheet id", http.StatusBadRequest)
 		return
 	}
 	var sig styleSignals
 	if err := datastar.ReadSignals(r, &sig); err != nil {
-		http.Error(w, "read signals: "+err.Error(), http.StatusBadRequest)
+		http.Error(w, "bad request", http.StatusBadRequest)
 		return
 	}
 	// The endpoints are parsed before the caps are applied. ParseRangeBounds
@@ -282,7 +282,7 @@ func (s *Server) handleStyle(w http.ResponseWriter, r *http.Request) {
 		obsLog.WarnContext(ctx, "style.failed",
 			"sheet", sheetID, "conn", sig.Conn, "name", s.authorName(sig.Conn),
 			"range", lo.String()+":"+hi.String(), "err", err.Error())
-		http.Error(w, err.Error(), status)
+		http.Error(w, commandErrorBody(err, status), status)
 		return
 	}
 

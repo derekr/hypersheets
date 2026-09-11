@@ -63,7 +63,7 @@ handshake to a second origin, removes an availability dependency, and stops the
 reader's browser telling anyone else which page they opened.
 
 The honest cost: jsdelivr served from an edge near the reader while this origin is
-one box in Los Angeles, so on a COLD cache a distant reader may fetch these bytes
+a single box, so on a COLD cache a distant reader may fetch these bytes
 more slowly than before. Every warm load and every navigation is faster, and the
 bytes are `immutable` under a content-addressed URL, so "cold" means once.
 

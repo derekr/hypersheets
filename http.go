@@ -374,11 +374,11 @@ func clampBuffer(lo, hi, rows int) (int, int) {
 func (s *Server) handlePage(w http.ResponseWriter, r *http.Request) {
 	sheetID := r.PathValue("sheetID")
 	if err := validSheetID(sheetID); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		http.Error(w, "bad sheet id", http.StatusBadRequest)
 		return
 	}
 	if !SheetExists(sheetID) {
-		http.Error(w, "no such sheet: "+sheetID, http.StatusNotFound)
+		http.Error(w, "no such sheet", http.StatusNotFound)
 		return
 	}
 	ctx, span := tracer.Start(r.Context(), "page.render")
@@ -401,7 +401,7 @@ func (s *Server) handlePage(w http.ResponseWriter, r *http.Request) {
 	sh, err := OpenSheet(sheetID)
 	if err != nil {
 		span.RecordError(err)
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
 	// The sheet is opened before the window is chosen because the row extent is a
@@ -423,7 +423,7 @@ func (s *Server) handlePage(w http.ResponseWriter, r *http.Request) {
 	cells, err := s.readWindow(ctx, sh, loRow, hiRow)
 	if err != nil {
 		span.RecordError(err)
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
 	// Column widths are shared sheet state, so the first paint has to carry them
@@ -498,7 +498,7 @@ type liveSignals struct {
 func (s *Server) handleLive(w http.ResponseWriter, r *http.Request) {
 	sheetID := r.PathValue("sheetID")
 	if err := validSheetID(sheetID); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		http.Error(w, "bad sheet id", http.StatusBadRequest)
 		return
 	}
 
@@ -535,7 +535,7 @@ func (s *Server) handleLive(w http.ResponseWriter, r *http.Request) {
 		HiBand:  BandOf(hiRow),
 	}
 	if err := s.reg.Register(c); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
 	// The close log exists for the open/close balance: a held-open stream that
@@ -1345,6 +1345,26 @@ func humanCommandError(prefix string, err error) string {
 	return prefix + ": " + err.Error()
 }
 
+// commandErrorBody is the sentence a failed command answers the request with.
+//
+// HTTP bodies reach anyone holding the network panel, so they carry no backend
+// detail: a 400 keeps the deterministic input-domain text (a malformed
+// reference names what was wrong with it and nothing else), the fan-out
+// refusal gets the same fixed sentence the chip carries, and anything that
+// would be a 500 — a store or filesystem failure — answers "internal error".
+// The detail stays where it belongs, in the server-side warn log at each call
+// site. The chip path (humanCommandError, humanStructError) is unchanged: it
+// goes to the issuing screen only, and its tests pin the wording.
+func commandErrorBody(err error, status int) string {
+	if status != http.StatusBadRequest {
+		return "internal error"
+	}
+	if errors.Is(err, ErrRecalcTooLarge) {
+		return "That change affects too many cells to recalculate in one go — try a smaller range."
+	}
+	return err.Error()
+}
+
 type cellSignals struct {
 	Ref string `json:"ref"`
 	Raw string `json:"raw"`
@@ -1382,13 +1402,13 @@ type cellSignals struct {
 func (s *Server) handleCell(w http.ResponseWriter, r *http.Request) {
 	sheetID := r.PathValue("sheetID")
 	if err := validSheetID(sheetID); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		http.Error(w, "bad sheet id", http.StatusBadRequest)
 		return
 	}
 
 	var sig cellSignals
 	if err := datastar.ReadSignals(r, &sig); err != nil {
-		http.Error(w, "read signals: "+err.Error(), http.StatusBadRequest)
+		http.Error(w, "bad request", http.StatusBadRequest)
 		return
 	}
 	ref, err := ParseRef(sig.Ref)
@@ -1472,7 +1492,8 @@ func (s *Server) handleCell(w http.ResponseWriter, r *http.Request) {
 		obsLog.WarnContext(ctx, "edit.failed",
 			"sheet", sheetID, "conn", sig.Conn, "name", s.authorName(sig.Conn),
 			"ref", ref.String(), "err", err.Error())
-		http.Error(w, err.Error(), commandStatus(err))
+		status := commandStatus(err)
+		http.Error(w, commandErrorBody(err, status), status)
 		return
 	}
 
@@ -1596,12 +1617,12 @@ const maxClearCells = maxWriteCells
 func (s *Server) handleClear(w http.ResponseWriter, r *http.Request) {
 	sheetID := r.PathValue("sheetID")
 	if err := validSheetID(sheetID); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		http.Error(w, "bad sheet id", http.StatusBadRequest)
 		return
 	}
 	var sig clearSignals
 	if err := datastar.ReadSignals(r, &sig); err != nil {
-		http.Error(w, "read signals: "+err.Error(), http.StatusBadRequest)
+		http.Error(w, "bad request", http.StatusBadRequest)
 		return
 	}
 	lo, hi, err := ParseRangeBounds(sig.Rng)
@@ -1677,7 +1698,8 @@ func (s *Server) handleClear(w http.ResponseWriter, r *http.Request) {
 		obsLog.WarnContext(ctx, "clear.failed",
 			"sheet", sheetID, "conn", sig.Conn, "name", s.authorName(sig.Conn),
 			"range", lo.String()+":"+hi.String(), "err", err.Error())
-		http.Error(w, err.Error(), commandStatus(err))
+		status := commandStatus(err)
+		http.Error(w, commandErrorBody(err, status), status)
 		return
 	}
 
@@ -1757,12 +1779,12 @@ type colResizeSignals struct {
 func (s *Server) handleColWidth(w http.ResponseWriter, r *http.Request) {
 	sheetID := r.PathValue("sheetID")
 	if err := validSheetID(sheetID); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		http.Error(w, "bad sheet id", http.StatusBadRequest)
 		return
 	}
 	var sig colResizeSignals
 	if err := datastar.ReadSignals(r, &sig); err != nil {
-		http.Error(w, "read signals: "+err.Error(), http.StatusBadRequest)
+		http.Error(w, "bad request", http.StatusBadRequest)
 		return
 	}
 	if sig.Rc < 0 || sig.Rc >= MaxCols {
@@ -1792,7 +1814,7 @@ func (s *Server) handleColWidth(w http.ResponseWriter, r *http.Request) {
 		obsLog.WarnContext(ctx, "colwidth.failed",
 			"sheet", sheetID, "conn", sig.Conn, "name", s.authorName(sig.Conn),
 			"col", sig.Rc, "width", px, "err", err.Error())
-		http.Error(w, err.Error(), status)
+		http.Error(w, commandErrorBody(err, status), status)
 		return
 	}
 
@@ -1835,12 +1857,12 @@ type rowResizeSignals struct {
 func (s *Server) handleRowHeight(w http.ResponseWriter, r *http.Request) {
 	sheetID := r.PathValue("sheetID")
 	if err := validSheetID(sheetID); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		http.Error(w, "bad sheet id", http.StatusBadRequest)
 		return
 	}
 	var sig rowResizeSignals
 	if err := datastar.ReadSignals(r, &sig); err != nil {
-		http.Error(w, "read signals: "+err.Error(), http.StatusBadRequest)
+		http.Error(w, "bad request", http.StatusBadRequest)
 		return
 	}
 	if sig.Rr < 0 || sig.Rr >= RowCeiling {
@@ -1872,7 +1894,7 @@ func (s *Server) handleRowHeight(w http.ResponseWriter, r *http.Request) {
 		obsLog.WarnContext(ctx, "rowheight.failed",
 			"sheet", sheetID, "conn", sig.Conn, "name", s.authorName(sig.Conn),
 			"row", sig.Rr, "height", px, "err", err.Error())
-		http.Error(w, err.Error(), status)
+		http.Error(w, commandErrorBody(err, status), status)
 		return
 	}
 
@@ -2049,12 +2071,12 @@ func (v viewportSignals) timing() clientTiming {
 func (s *Server) handleViewport(w http.ResponseWriter, r *http.Request) {
 	sheetID := r.PathValue("sheetID")
 	if err := validSheetID(sheetID); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		http.Error(w, "bad sheet id", http.StatusBadRequest)
 		return
 	}
 	var sig viewportSignals
 	if err := datastar.ReadSignals(r, &sig); err != nil {
-		http.Error(w, "read signals: "+err.Error(), http.StatusBadRequest)
+		http.Error(w, "bad request", http.StatusBadRequest)
 		return
 	}
 
@@ -2101,7 +2123,7 @@ func (s *Server) handleViewport(w http.ResponseWriter, r *http.Request) {
 	added, dropped, err := s.reg.SetBufferCtx(ctx, sig.Conn, BandOf(loRow), BandOf(hiRow))
 	if err != nil {
 		span.RecordError(err)
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
 	scr.setWindow(loRow, hiRow)
