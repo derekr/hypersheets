@@ -73,6 +73,42 @@ reads are flat now, but the per-viewer work that remains — building each patch
 and writing it to each socket — still scales with N, and that was never separately
 measured. Raising the cap is its own measurement, not a corollary of this one.
 
+### Why not shared fat morphs
+
+The tempting next step — render the edit's window once and send every viewer on
+it the same bytes — is almost already the architecture, which is why it buys so
+little. The full-window path IS a shared fat morph in everything but the socket
+write: `renderWindowParts` is a pure function of cells, range and sheet id, the
+selection is always zero, and the halves are cached per window and version above
+the same read. What stays per viewer there is chrome (styles, presence,
+aggregate, widths, extent, latency), the digest check, and the `write()` itself —
+none of which sharing can remove.
+
+Routing *edits* down that path would be correct (same purity argument, and the
+per-connection digest still skips viewers who are already current) but it spends
+two measured budgets to save an unmeasured one. A 10-cell edit ships a ~226 KB
+raw window instead of a few hundred bytes, so everyone on the dirty window pays
+a full re-render per edit — the README's 51×, median-29-byte push and 47%
+suppression rate die in exactly the hot case they describe. The client pays a
+full Idiomorph per edit (~6.3 ms flat) instead of a targeted morph at
+fast-typist commit rates. And the saving is patch-build CPU, which was never
+isolated from socket writes in any measurement — the bottleneck this section
+fixed was the read, and the writes stay per viewer regardless.
+
+The region-based variant is worse: a dirty-region fragment reintroduces the
+divergence the full window avoids, because viewer A holds the cell element and
+viewer B does not, so identical bytes mean morph for one and insert for the
+other. The shareable cohort becomes (window, version, held-mask over the dirty
+rows) — an O(buffer) compare per viewer per push, a key space of windows ×
+versions × mask states, and exact-invalidation-or-corruption semantics, since a
+wrongly shared fragment orphans or duplicates elements and desyncs `heldMask`
+permanently. Identical bytes can already mean different DOM operations, which is
+why the digest covers morph payloads only.
+
+Reopen when per-viewer patch-build CPU vs N is measured in isolation from
+socket writes and shows up as the cap. Until then the per-viewer edit patch
+stands.
+
 ## Bulk write performance
 
 The last O(cells) hole. Measured: clear/fill/paste are ~0.09-0.13 ms per cell, so 1,000
