@@ -97,9 +97,17 @@ discretely.
 | **operations** | `limits` `reaper` `readonly` `headers` `assets` |
 | **observability** | `otel` `logging` `analyze` |
 
-One flat `package main`, deliberately. The seams above are real and acyclic, but
-extracting them would mean threading an injected store through every handler — a
-few days of plumbing on a working prototype, for no reader's benefit.
+One flat `package main`, deliberately — and deliberately not idiomatic Go.
+This is a prototype, not a library: nothing here is importable, and the
+structure optimizes for reading straight through rather than for godoc,
+interfaces, or reuse. Extracting packages would mean threading an injected
+store through every handler — a few days of plumbing on a working prototype,
+for no reader's benefit. (See `ARCHITECTURE.md` § *Why one flat package*.)
+
+Embedded NATS is the same kind of choice. In-process channels would do today;
+the embedded server is here so fan-out stays a subject subscription if sheets
+ever span processes or regions — an experiment that hasn't happened, which is
+why `-nats-listen` stays empty on every real deployment.
 
 ## How to read this
 
