@@ -1,0 +1,9 @@
+{
+  "name": "hypersheets-sim",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Two-browser collaboration demo for the hypersheets README",
+  "dependencies": {
+    "playwright-core": "*"
+  }
+}

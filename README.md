@@ -139,6 +139,12 @@ Then `RESULTS.md` for the numbers that contradicted the reasoning, and
 `BACKLOG.md` for decisions already reasoned through and not built. The full
 8-stop version of this lives in `ARCHITECTURE.md` (§ *Read in this order*).
 
+## Two users, one sheet
+
+![User B's screen: D4 selected showing =C4*2 in the formula bar, both users present](docs/multiuser-b.png)
+
+![User A's screen: D4 arrived as bold $84.00 on red, with B's cursor on it](docs/multiuser-a.png)
+
 ## Where it falls short
 
 - **Each viewer still builds its own patch.** The database read behind it is
