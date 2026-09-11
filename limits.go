@@ -1155,5 +1155,6 @@ func indexCreateOnlyHTML(ttl time.Duration) string {
 		`<form method="post" action="/sheets" style="margin:0">` +
 		`<button class="btn p" type="submit">New sheet</button></form></div>` +
 		`<div class="empty">Open a sheet with its link.</div>` +
+		`<p class="src"><a href="https://github.com/derekr/hypersheets">Source on GitHub</a> — a prototype to read, not a library to reuse.</p>` +
 		`</main></body></html>`
 }

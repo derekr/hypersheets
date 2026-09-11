@@ -45,6 +45,8 @@ li a:hover{color:#1a73e8}
 li .m{color:#5f6368;font-family:ui-monospace,SFMono-Regular,monospace;font-size:12px}
 li .tag{padding:2px 8px;border-radius:10px;background:#e8f0fe;color:#1967d2;font-size:11px}
 .empty{padding:32px 16px;color:#5f6368;text-align:center}
+.src{margin:28px 0 0;color:#5f6368;font-size:12px;text-align:center}
+.src a{color:#1a73e8;text-decoration:none}
 `
 
 // handleRoot lists the sheets. Once sheets can be created, "which sheets are
@@ -104,6 +106,7 @@ func (s *Server) handleRoot(w http.ResponseWriter, r *http.Request) {
 		}
 		b.WriteString(`</ul>`)
 	}
+	b.WriteString(`<p class="src"><a href="https://github.com/derekr/hypersheets">Source on GitHub</a> — a prototype to read, not a library to reuse.</p>`)
 	b.WriteString(`</main></body></html>`)
 
 	// no-store, not merely no-cache: this document is a live render whose shell
