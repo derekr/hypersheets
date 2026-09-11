@@ -2,6 +2,11 @@
 
 A realtime multiplayer spreadsheet with no client-side application state.
 
+Read this repo before you run it. It is a study artifact, not a starting
+point: the value is the architecture and the data modeling, laid out so a
+reader can follow both end to end. Running it is optional and reuse is not
+the goal.
+
 The server renders HTML and patches it over SSE. The browser holds only what is
 genuinely local — which cell is active, and whether it is being edited. Everything
 else, including what every other person is doing, arrives as markup.
@@ -9,7 +14,8 @@ else, including what every other person is doing, arrives as markup.
 **Live demo:** https://hypersheets.yagni.club
 
 > Status: prototype. It exists to test a thesis, not to replace a spreadsheet.
-> See [Where it falls short](#where-it-falls-short).
+> 26 columns, a small formula set, no auth, no sharing model, no export — that
+> is demo scope, not a roadmap. See [Where it falls short](#where-it-falls-short).
 
 ## The thesis
 
@@ -95,7 +101,61 @@ One flat `package main`, deliberately. The seams above are real and acyclic, but
 extracting them would mean threading an injected store through every handler — a
 few days of plumbing on a working prototype, for no reader's benefit.
 
-## Running it
+## How to read this
+
+Two tracks, depending on what you came for. Either ends at `growrows.go`
+(161 lines): one complete feature — storage, policy, HTML, client behaviour,
+HTTP handler — and the shape almost every other feature takes.
+
+**Hypermedia track** — how the browser stays dumb:
+
+1. `render.go` § *Page shell* — sparse rendering; an empty cell costs nothing.
+2. `screen.go` — what the server remembers about one viewer.
+3. `push.go` — a woken screen becomes bytes; full-window vs. cell-patch paths.
+4. `http.go` § `push` / `pushCells` / `renderCellPatch` — why the DB read is
+   shared and the markup is per viewer (morph vs. insert depends on what that
+   browser already holds).
+5. `keys.go` — what the keyboard means; interaction stays local until it commits.
+
+**Data-model track** — where the leverage is:
+
+1. `bandkey.go` — position is not identity; the idea the storage turns on.
+2. `store.go` (§ *Storage model*, § *Reads*) — schema; a window read is one
+   contiguous scan.
+3. `actor.go` — one goroutine per sheet; the single place a write can happen.
+4. `recalc.go` — the dirty set is discovered *during* the write, not after it.
+5. `DATA-MODEL.md` changes 3–6 — band keys, extents, styling cascade, each with
+   the measurement that motivated it.
+
+Then `RESULTS.md` for the numbers that contradicted the reasoning, and
+`BACKLOG.md` for decisions already reasoned through and not built. The full
+8-stop version of this lives in `ARCHITECTURE.md` (§ *Read in this order*).
+
+## Where it falls short
+
+- **Each viewer still builds its own patch.** The database read behind it is
+  shared — one edit costs one read whether two people or a hundred are watching —
+  but whether a cell arrives as a morph or an insert depends on what that browser
+  already holds, so the markup is genuinely per viewer. Whether that justifies
+  raising the connection cap has not been measured.
+- 26 columns, A–Z. Growing that axis is a render-layer change, not a storage one.
+- Formulas cover arithmetic, ranges and the common aggregates. It is not Excel.
+- No authentication, no sharing model, no export.
+- One region, so latency is what it is. See the note in `BACKLOG.md`.
+
+## Reading further
+
+- `SPEC.md` — what was in scope and what was not
+- `DATA-MODEL.md` — storage design, and why each on-disk change happened
+- `RESULTS.md` — what was measured, including the times a measurement contradicted
+  the obvious reasoning
+- `BACKLOG.md` — what is deliberately not built, and the constraints that would
+  bite whoever builds it
+
+## Running it (optional)
+
+Reading is the point; this is here so you can poke at the thing you just read
+about.
 
 ```
 go build -o /tmp/hypersheets . && /tmp/hypersheets -addr :8090 -data /tmp/ss
@@ -118,27 +178,6 @@ the interesting thing to scroll around in.
 **A sheet's URL is its capability.** Anyone with the link can read and write it,
 and there is no other way back to it. That is deliberate for a demo and is the
 first thing to change for anything else.
-
-## Where it falls short
-
-- **Each viewer still builds its own patch.** The database read behind it is
-  shared — one edit costs one read whether two people or a hundred are watching —
-  but whether a cell arrives as a morph or an insert depends on what that browser
-  already holds, so the markup is genuinely per viewer. Whether that justifies
-  raising the connection cap has not been measured.
-- 26 columns, A–Z. Growing that axis is a render-layer change, not a storage one.
-- Formulas cover arithmetic, ranges and the common aggregates. It is not Excel.
-- No authentication, no sharing model, no export.
-- One region, so latency is what it is. See the note in `BACKLOG.md`.
-
-## Reading further
-
-- `SPEC.md` — what was in scope and what was not
-- `DATA-MODEL.md` — storage design, and why each on-disk change happened
-- `RESULTS.md` — what was measured, including the times a measurement contradicted
-  the obvious reasoning
-- `BACKLOG.md` — what is deliberately not built, and the constraints that would
-  bite whoever builds it
 
 ## Licence
 
