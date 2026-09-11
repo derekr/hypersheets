@@ -314,7 +314,7 @@ func TestHandoverWindowIsValidated(t *testing.T) {
 func TestTheShellHandsOverWhatItRendered(t *testing.T) {
 	grid := renderWindow(sampleCells(4), 0, 3, "demo", selRange{})
 	css := "#b b.s3{font-weight:700}"
-	shell := pageShellWidths("demo", 0, 3, grid, zeroAnchor(), nil, DefaultRows, css, nil)
+	shell := pageShellWidths("demo", 0, 3, grid, zeroAnchor(), nil, DefaultRows, css, nil, true)
 	want := "bl=0&amp;bh=3&amp;d=" + digestHex(grid) + "&amp;sy=" + digestHex(css)
 	if !strings.Contains(shell, want) {
 		i := strings.Index(shell, `id="live"`)

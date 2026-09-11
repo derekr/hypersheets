@@ -241,6 +241,10 @@ func main() {
 	// See Limiter.tellScreen.
 	lim.Notify(srv.notify)
 	log.Print(lim.Describe())
+	// The shell's "All sheets" link is only useful where following it lists:
+	// index=list for everyone, an authed admin under create/off. Wired here,
+	// where the limiter exists, rather than constructed with the server.
+	srv.SetIndexPolicy(IndexMode(*indexMode), lim.isAdmin)
 
 	// The reaper comes after the registry and the limiter because it needs both:
 	// the registry answers "is anybody connected to this sheet right now" (a

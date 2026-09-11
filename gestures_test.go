@@ -21,7 +21,7 @@ func TestTheGutterArbitratesItsThreeGestures(t *testing.T) {
 	// underneath itself, and the element issuing the commit was one a push could
 	// replace, which aborts its in-flight request. Sharing `#vp`'s handlers
 	// leaves nothing to race and nothing to stop propagating.
-	page := pageShellWidths("demo", 0, 3, "", zeroAnchor(), nil, DefaultRows, "", nil)
+	page := pageShellWidths("demo", 0, 3, "", zeroAnchor(), nil, DefaultRows, "", nil, true)
 	for _, want := range []string{"rzDownR(evt)", "rzMoveR(evt.clientY)", "rzEndR(evt.clientY)", "fitR(rw)"} {
 		if !strings.Contains(page, want) {
 			t.Errorf("the row gesture is not on the page shell: %q is missing", want)

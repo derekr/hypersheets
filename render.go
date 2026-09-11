@@ -1624,16 +1624,17 @@ func colWidthOf(widths map[int]int, c int) int {
 // server and the signals riding the next command are the only channel there is.
 
 // pageShell renders the shell with default column widths and a default-sized
-// sheet, for callers that do not care about shared sheet geometry.
+// sheet, for callers that do not care about shared sheet geometry. The listing
+// link is shown: test shells stand in for pages where it belongs.
 func pageShell(sheetID string, loRow, hiRow int, grid string, at anchor) string {
-	return pageShellWidths(sheetID, loRow, hiRow, grid, at, nil, DefaultRows, "", nil)
+	return pageShellWidths(sheetID, loRow, hiRow, grid, at, nil, DefaultRows, "", nil, true)
 }
 
 // styleCSS is the sheet's own stylesheet, from sh.StyleRules(). It rides in the
 // shell for the same reason the column widths do: it is O(config), it changes
 // only when a style is created or collected, and a push then patches ~50 bytes
 // instead of re-rendering a grid to change a colour.
-func pageShellWidths(sheetID string, loRow, hiRow int, grid string, at anchor, widths map[int]int, rows int, styleCSS string, heights map[int]int) string {
+func pageShellWidths(sheetID string, loRow, hiRow int, grid string, at anchor, widths map[int]int, rows int, styleCSS string, heights map[int]int, showAllSheets bool) string {
 	esc := html.EscapeString(sheetID)
 	var b strings.Builder
 	b.Grow(len(grid) + len(gridCSS) + 3072)
@@ -1794,7 +1795,13 @@ func pageShellWidths(sheetID string, loRow, hiRow int, grid string, at anchor, w
 	// Neither needs Datastar, neither needs a signal, and both work with the
 	// bundle blocked — which is the right default for the two actions that
 	// navigate rather than patch.
-	b.WriteString(`<a class="btn" href="/">All sheets</a>`)
+	// "All sheets" is a link to the listing, so it is only rendered when the
+	// reader would actually see one: index=list for everyone, or an authed
+	// admin under create/off. Otherwise it advertises a page that 404s — or
+	// worse, hints that a listing exists to someone it is hidden from.
+	if showAllSheets {
+		b.WriteString(`<a class="btn" href="/">All sheets</a>`)
+	}
 	b.WriteString(`<form method="post" action="/sheets" style="margin:0"><button class="btn p" type="submit">New sheet</button></form>`)
 	b.WriteString(`</header>`)
 	// The formula bar: page-shell furniture between the toolbar and the scroll

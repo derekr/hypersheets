@@ -167,3 +167,50 @@ func mustRead(t *testing.T, path string) string {
 	}
 	return string(b)
 }
+
+// The "All sheets" link in the page shell must follow the listing: it is
+// shown exactly when following it would show one. An unauthed visitor under
+// create/off gets a create page or a 404, so the link would be a lie — and a
+// hint that a listing exists to be found.
+func TestAllSheetsLinkFollowsTheListing(t *testing.T) {
+	mk := func(idx IndexMode) *Server {
+		p := DefaultLimitPolicy()
+		p.Index = idx
+		p.AdminEmail = "owner@example.com"
+		p.TrustForwardedFor = true
+		lim := NewLimiter(p)
+		srv := NewServer(ServerOptions{})
+		srv.SetIndexPolicy(idx, lim.isAdmin)
+		return srv
+	}
+	anon := httptest.NewRequest("GET", "/s/demo", nil)
+	admin := httptest.NewRequest("GET", "/s/demo", nil)
+	admin.Header.Set(adminEmailHeader, "owner@example.com")
+	forged := httptest.NewRequest("GET", "/s/demo", nil)
+	forged.Header.Set(adminEmailHeader, "someone@example.com")
+	for _, c := range []struct {
+		name  string
+		index IndexMode
+		r     *http.Request
+		want  bool
+	}{
+		{"list shows everyone the link", IndexList, anon, true},
+		{"create hides it from visitors", IndexCreate, anon, false},
+		{"off hides it from visitors", IndexOff, anon, false},
+		{"create shows it to the admin", IndexCreate, admin, true},
+		{"off shows it to the admin", IndexOff, admin, true},
+		{"a forged header buys nothing", IndexCreate, forged, false},
+	} {
+		if got := mk(c.index).showAllSheets(c.r); got != c.want {
+			t.Errorf("%s: showAllSheets = %v, want %v", c.name, got, c.want)
+		}
+	}
+	// And the shell obeys the flag: present when true, with no trace of it
+	// when false — not a hidden element, not a comment, nothing to find.
+	if got := pageShellWidths("demo", 0, 3, "", zeroAnchor(), nil, DefaultRows, "", nil, true); !strings.Contains(got, `href="/"`) {
+		t.Error("showAllSheets=true left the link out of the shell")
+	}
+	if got := pageShellWidths("demo", 0, 3, "", zeroAnchor(), nil, DefaultRows, "", nil, false); strings.Contains(got, "All sheets") {
+		t.Error("showAllSheets=false left a trace of the link in the shell")
+	}
+}

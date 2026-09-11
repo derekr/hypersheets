@@ -165,6 +165,14 @@ type Server struct {
 	bufferBands  int
 	latency      time.Duration
 
+	// index decides whether GET / lists sheets; isAdmin names the viewers who
+	// see the listing anyway. Together they decide whether the page shell
+	// carries the "All sheets" link: it is shown exactly when following it
+	// would show a listing. Both arrive after construction because the limiter
+	// that owns them is built after the server; see SetIndexPolicy.
+	index   IndexMode
+	isAdmin func(*http.Request) bool
+
 	mu      sync.RWMutex
 	screens map[string]*screen
 
@@ -208,6 +216,27 @@ func NewServer(opts ServerOptions) *Server {
 		screens:      make(map[string]*screen),
 		edits:        make(map[string]*editLog),
 	}
+}
+
+// SetIndexPolicy tells the server which index mode the deployment runs and
+// who counts as an admin, so handlePage can decide whether the "All sheets"
+// link belongs in the shell. It is a setter rather than ServerOptions because
+// the limiter that answers both is constructed after the server in main;
+// a server without it hides the link, which is the safe default.
+func (s *Server) SetIndexPolicy(idx IndexMode, isAdmin func(*http.Request) bool) {
+	s.index = idx
+	s.isAdmin = isAdmin
+}
+
+// showAllSheets reports whether following the "All sheets" link would show
+// this request a listing: index=list shows everyone one, and an admin sees
+// one under create/off too. Everyone else gets a create page or a 404, so
+// the link would be a lie (or a hint) and is left out of their shell.
+func (s *Server) showAllSheets(r *http.Request) bool {
+	if s.index == IndexList {
+		return true
+	}
+	return s.isAdmin != nil && s.isAdmin(r)
 }
 
 // editLogFor returns the sheet's dirty-set history, creating it on first use.
@@ -451,7 +480,7 @@ func (s *Server) handlePage(w http.ResponseWriter, r *http.Request) {
 		allHeights = nil
 	}
 	shell := pageShellWidths(sheetID, loRow, hiRow, grid, at, widths, rows,
-		sheetStyleCSS(sh, loRow, hiRow), allHeights)
+		sheetStyleCSS(sh, loRow, hiRow), allHeights, s.showAllSheets(r))
 	span.SetAttributes(
 		attribute.String("sheet.id", sheetID),
 		attribute.Int("sheet.rows", rows),

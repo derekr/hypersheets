@@ -256,7 +256,7 @@ func TestHeightPairsAreFlatAndSorted(t *testing.T) {
 // The client's offset arithmetic is the half the server cannot check, so at least
 // pin that the page ships what that arithmetic needs.
 func TestTheShellShipsTheHeightsAndTheReader(t *testing.T) {
-	page := pageShellWidths("demo", 0, 9, "", zeroAnchor(), nil, DefaultRows, "", map[int]int{2: 70})
+	page := pageShellWidths("demo", 0, 9, "", zeroAnchor(), nil, DefaultRows, "", map[int]int{2: 70}, true)
 	if !strings.Contains(page, heightSignal+":[2,70]") {
 		t.Error("the shell does not seed the resized rows")
 	}
