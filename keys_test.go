@@ -48,6 +48,42 @@ func TestCellMarkupUnchangedByInteractionModel(t *testing.T) {
 	}
 }
 
+// ESCAPING IS THE ONLY XSS LAYER. CSP cannot stop injected script
+// (headers.go: `unsafe-inline` + `unsafe-eval` are structural), so every cell
+// another viewer receives must carry attack markup as inert text. This pins
+// both emission paths — the per-cell patch and the full render both funnel
+// through writeCell, and both must agree.
+func TestCellTextIsEscapedForOtherViewers(t *testing.T) {
+	evil := []Cell{
+		{Ref: CellRef{Row: 0, Col: 0}, Kind: KindText, Raw: `<script>alert(1)</script>`, Computed: `<script>alert(1)</script>`, Display: `<script>alert(1)</script>`},
+		{Ref: CellRef{Row: 1, Col: 1}, Kind: KindText, Raw: `<img src=x onerror=alert(2)>`, Computed: `<img src=x onerror=alert(2)>`, Display: `<img src=x onerror=alert(2)>`},
+		{Ref: CellRef{Row: 2, Col: 2}, Kind: KindText, Raw: `a"b'c<d>`, Computed: "x", Display: "y"},
+	}
+	bodies := map[string]string{}
+	bodies["cell patch"] = renderCells(evil)
+	dense := blankCells(0, 2)
+	dense[0*MaxCols+0], dense[1*MaxCols+1], dense[2*MaxCols+2] = evil[0], evil[1], evil[2]
+	bodies["full render"] = renderWindow(dense, 0, 2, "demo", selRange{})
+	for name, body := range bodies {
+		// Tag openers, not attribute names: the escaped payload still
+		// spells "onerror=alert" as inert text, and that is fine — what
+		// must never appear is a live element.
+		for _, live := range []string{"<script>", "<img", `"a"b`} {
+			if strings.Contains(body, live) {
+				t.Errorf("%s carries unescaped %q:\n%s", name, live, body)
+			}
+		}
+		if !strings.Contains(body, "&lt;script&gt;") {
+			t.Errorf("%s lost the payload instead of escaping it:\n%s", name, body)
+		}
+	}
+	// The quote payload must survive as data, escaped for the attribute.
+	got := renderCells(evil[2:])
+	if !strings.Contains(got, "data-r=") || !strings.Contains(got, "&#34;") {
+		t.Errorf("quoted raw text is not attribute-escaped:\n%s", got)
+	}
+}
+
 // A ROW MUST CARRY NO HANDLERS EITHER. renderCellRows is what an incremental
 // scroll patch ships; one `data-on` per row would be 10,000 copies.
 func TestRowMarkupCarriesNoHandlers(t *testing.T) {
